@@ -80,36 +80,76 @@ FINDER_BLEND_ALPHA = 0.85
 class CompositionInfo:
     canvas_w: int
     canvas_h: int
+    # Inner QR rectangle inside the scene canvas — used by scannability score
+    # and finder reinforcement (where the ACTUAL QR modules live).
     qr_size: int
     qr_pos: tuple[int, int]
-    qr_image: Image.Image  # QR pattern at qr_size × qr_size — used as ControlNet input
+    # Diffusion canvas — what gets fed to ControlNet and what gets pasted
+    # into the scene. When qr_coverage < 1.0 this is larger than qr_size:
+    # the actual QR sits in the center with #808080 gray padding around it,
+    # giving the diffusion freedom to paint prompt content in the margin.
+    # When coverage = 1.0 (default), diffusion_size == qr_size.
+    diffusion_size: int
+    diffusion_pos: tuple[int, int]
+    qr_image: Image.Image  # diffusion-canvas-sized control input (may include gray margin)
     scaffold: str
+
+
+QR_MARGIN_GRAY = (128, 128, 128)  # #808080 — see build_composition()
 
 
 def build_composition(
     data: str,
     name: str,
     qr_monster_version: str = "v1",
+    qr_coverage: float = 1.0,
 ) -> CompositionInfo:
     """Build the composition layout + ground-truth QR control image.
 
-    Note on v2: an earlier revision rendered the v2 control image with a
-    gray (#808080) background per a community tip. Empirical testing
-    showed it produced clean photos with zero QR pattern at any scale we
-    were comfortable with — the lower gray-vs-black contrast in the
-    control input made the controlnet gradient too weak to drive
-    conditioning. The "gray background" tip seems to apply to img2img
-    init images, not the controlnet input. Both v1 and v2 use a
-    white-bg control image.
+    qr_coverage < 1.0 renders the QR at (cfg.qr_size * coverage) and centers
+    it on a (cfg.qr_size × cfg.qr_size) #808080 gray canvas. The diffusion
+    sees strong QR conditioning in the central region and a weak/neutral
+    signal in the gray margin — so the prompt's scene content can grow
+    naturally around the QR (sky, ground, buildings, sub-foreground) instead
+    of being forced into QR-pattern shapes everywhere.
+
+    This is the "QR as a feature in a scene" workflow the QR Monster v2
+    community uses. It's what produces the iconic tree-canopy-as-QR and
+    temple-domes-as-QR aesthetics that pure full-canvas QR can't reach.
+
+    qr_pos and qr_size are updated to point to the inner QR rectangle so
+    that finder reinforcement, scannability scoring, and composition paste
+    logic all operate on the actual QR area — not the padded canvas.
     """
     cfg = COMPOSITIONS.get(name, COMPOSITIONS["standalone"])
     cw, ch = cfg["canvas_size"]
+
+    coverage = max(0.40, min(qr_coverage, 1.0))
+    diffusion_size = cfg["qr_size"]
+    inner_qr_size = int(diffusion_size * coverage)
+    # Snap to multiple of 8 — keeps the gray border aligned and avoids
+    # sub-pixel resize artifacts on the QR's modules.
+    inner_qr_size = max(64, (inner_qr_size // 8) * 8)
+    inner_offset = (diffusion_size - inner_qr_size) // 2
+
+    qr_inner = make_qr(data, size=inner_qr_size)
+    if inner_qr_size == diffusion_size:
+        qr_image = qr_inner
+    else:
+        qr_image = Image.new("RGB", (diffusion_size, diffusion_size), QR_MARGIN_GRAY)
+        qr_image.paste(qr_inner, (inner_offset, inner_offset))
+
+    diffusion_pos = cfg["qr_pos"]
+    inner_qr_pos = (diffusion_pos[0] + inner_offset, diffusion_pos[1] + inner_offset)
+
     return CompositionInfo(
         canvas_w=cw,
         canvas_h=ch,
-        qr_size=cfg["qr_size"],
-        qr_pos=cfg["qr_pos"],
-        qr_image=make_qr(data, size=cfg["qr_size"]),
+        qr_size=inner_qr_size,
+        qr_pos=inner_qr_pos,
+        diffusion_size=diffusion_size,
+        diffusion_pos=diffusion_pos,
+        qr_image=qr_image,
         scaffold=cfg["scaffold"],
     )
 
@@ -252,35 +292,44 @@ def composite_qr_into_scene(
     data: str | None = None,
     reinforce_finders_flag: bool = True,
     quiet_zone_px: int = QUIET_ZONE_PX,
+    diffusion_pos: tuple[int, int] | None = None,
+    diffusion_size: int | None = None,
+    qr_pos: tuple[int, int] | None = None,
+    qr_size: int | None = None,
 ) -> Image.Image:
-    """Paste qr_art into scene at the composition's QR position with a
-    finder-aware alpha mask, a quiet-zone pad ring, and optional finder
-    reinforcement.
+    """Paste qr_art into scene with a finder-aware alpha mask, a quiet-zone
+    pad ring, and optional finder reinforcement.
 
-    feather_px is the soft-edge radius applied to BR + interior edges only.
-    The TL/TR/BL finder-pattern corners are kept hard (no feathering) — they
-    are the most fragile QR feature and even a 4-px blur can break detection.
+    The diffusion canvas (qr_art, which is generated at diffusion_size and
+    may include a gray margin around the actual QR) is pasted at
+    diffusion_pos. Finder reinforcement, when enabled, targets the INNER
+    qr_pos/qr_size — the actual QR rectangle. With coverage = 1.0 the inner
+    rectangle equals the diffusion rectangle.
 
-    quiet_zone_px adds a tonally-matched light ring inside the qr_size area
-    BEFORE the QR modules. Scanners need a quiet zone to lock onto finder
-    patterns; in compositions the scene reaches the QR boundary by default.
-
-    `data` is the QR payload — required when `reinforce_finders=True` so we
-    can render the ground-truth finder pattern.
+    For backward compatibility, when the explicit overrides aren't passed
+    the function falls back to the COMPOSITIONS dict (which is correct only
+    when coverage = 1.0). Callers using the QR coverage feature MUST pass
+    the explicit values from CompositionInfo.
     """
     cfg = COMPOSITIONS.get(composition, COMPOSITIONS["standalone"])
-    qx, qy = cfg["qr_pos"]
-    qsz = cfg["qr_size"]
+    if diffusion_pos is None:
+        diffusion_pos = cfg["qr_pos"]
+    if diffusion_size is None:
+        diffusion_size = cfg["qr_size"]
+    if qr_pos is None:
+        qr_pos = diffusion_pos
+    if qr_size is None:
+        qr_size = diffusion_size
 
     out = scene.copy().convert("RGB")
-    # Pad the QR art with a quiet-zone ring (effectively shrinks the QR
-    # modules slightly) before resizing back to qsz so the paste still fills
-    # the canvas slot.
+    # Quiet-zone pad applies to the WHOLE diffusion canvas (including any
+    # gray margin) before paste; the inner QR's own quiet zone is handled
+    # by the gray margin when coverage < 1.0.
     padded = _quiet_zone_pad(qr_art, quiet_zone_px)
-    qr_resized = padded.resize((qsz, qsz)).convert("RGB")
-    out.paste(qr_resized, (qx, qy), _finder_aware_mask(qsz, feather_px))
+    qr_resized = padded.resize((diffusion_size, diffusion_size)).convert("RGB")
+    out.paste(qr_resized, diffusion_pos, _finder_aware_mask(diffusion_size, feather_px))
 
     if reinforce_finders_flag and data is not None:
-        out = reinforce_finders(out, data, (qx, qy), qsz)
+        out = reinforce_finders(out, data, qr_pos, qr_size)
 
     return out

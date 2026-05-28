@@ -81,6 +81,12 @@ class GenerationRequest:
     # signal at the same scale, so users running v2 typically dial scale
     # down ~0.10 from their v1 settings.
     qr_monster_version: str = "v1"
+    # Fraction of the diffusion canvas the QR code occupies. 1.0 = QR fills
+    # the canvas (legacy default). <1.0 centers the QR with #808080 gray
+    # padding around it; the diffusion paints prompt content in the margin
+    # (the "QR-as-feature-in-a-scene" workflow). 0.70-0.80 produces the
+    # tree-canopy / temple-cluster aesthetic.
+    qr_coverage: float = 1.0
     # Init image (user upload). When set, pass-1 becomes ControlNet img2img
     # seeded with this image at (1 - init_strength) preservation. For
     # non-standalone compositions, the init image replaces the
@@ -179,17 +185,12 @@ def _fit_to(img: Image.Image, w: int, h: int) -> Image.Image:
 
 
 def _score_for(image: Image.Image, data: str, comp) -> float:
-    """Compute scannability against the QR region defined by comp."""
-    if is_standalone_comp(comp):
-        return scannability_score(image, data)
+    """Compute scannability against the inner QR rectangle defined by comp.
+    Always passes qr_pos + qr_size now; with coverage < 1.0 they point to
+    the inner QR inside a gray-padded diffusion canvas."""
     return scannability_score(
         image, data, qr_pos=comp.qr_pos, qr_size=comp.qr_size,
     )
-
-
-def is_standalone_comp(comp) -> bool:
-    """A standalone comp's qr_pos is (0,0) and qr_size matches canvas dims."""
-    return comp.qr_pos == (0, 0) and comp.qr_size == comp.canvas_w == comp.canvas_h
 
 
 class Generator:
@@ -206,7 +207,9 @@ class Generator:
     ) -> GenerationResult:
         # Composition scaffold goes in BEFORE style preset so the style suffix
         # (RAW photo, 8k, etc.) lands at the very end where SD weighs it most.
-        comp = build_composition(req.data, req.composition, req.qr_monster_version)
+        comp = build_composition(
+            req.data, req.composition, req.qr_monster_version, req.qr_coverage,
+        )
         full_prompt = req.prompt + comp.scaffold
         prompt, negative = compose(full_prompt, req.style, req.negative_prompt)
 
@@ -379,7 +382,7 @@ class Generator:
         canny_image: Image.Image | None = None
         canny_scale = max(0.0, float(req.canny_scale))
         if init_image is not None and canny_scale > 0:
-            sized = _fit_to(init_image, comp.qr_size, comp.qr_size)
+            sized = _fit_to(init_image, comp.diffusion_size, comp.diffusion_size)
             canny_image = _canny_edges(sized)
 
         # Pass-1: either txt2img + ControlNet (default), or img2img +
@@ -391,7 +394,7 @@ class Generator:
         use_init_for_pass1 = init_image is not None and is_standalone(req.composition)
         if use_init_for_pass1:
             assert init_image is not None
-            init_for_pass1 = _fit_to(init_image, comp.qr_size, comp.qr_size)
+            init_for_pass1 = _fit_to(init_image, comp.diffusion_size, comp.diffusion_size)
             qr_pass1 = self.pipeline.generate_pass1_from_init(
                 init_image=init_for_pass1,
                 qr_image=comp.qr_image,
@@ -403,8 +406,8 @@ class Generator:
                 tile_scale=req.tile_scale,
                 strength=req.init_strength,
                 seed=seed,
-                width=comp.qr_size,
-                height=comp.qr_size,
+                width=comp.diffusion_size,
+                height=comp.diffusion_size,
                 canny_image=canny_image,
                 canny_scale=canny_scale,
                 step_callback=progress.step_cb("pass1", req.steps),
@@ -422,8 +425,8 @@ class Generator:
                 control_start=0.0,
                 control_end=req.control_end,
                 seed=seed,
-                width=comp.qr_size,
-                height=comp.qr_size,
+                width=comp.diffusion_size,
+                height=comp.diffusion_size,
                 canny_image=canny_image,
                 canny_scale=canny_scale,
                 step_callback=progress.step_cb("pass1", req.steps),
@@ -462,6 +465,10 @@ class Generator:
             return composite_qr_into_scene(
                 scene, qr_art, req.composition, data=req.data,
                 reinforce_finders_flag=False,
+                diffusion_pos=comp.diffusion_pos,
+                diffusion_size=comp.diffusion_size,
+                qr_pos=comp.qr_pos,
+                qr_size=comp.qr_size,
             )
 
         def composite_and_scan(qr_art: Image.Image) -> tuple[Image.Image, str | None]:

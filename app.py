@@ -181,6 +181,11 @@ class GenerateBody(BaseModel):
     # QR Monster ControlNet version: 'v1' (default) or 'v2'. Both are loaded
     # at warm time and swapped per-request without a model reload.
     qr_monster_version: str = "v1"
+    # Fraction of the diffusion canvas the QR occupies. 1.0 = QR fills the
+    # canvas (legacy). <1.0 leaves a #808080 gray margin where the prompt's
+    # scene grows naturally. 0.70-0.80 is the sweet spot for "QR as a
+    # feature inside a larger scene."
+    qr_coverage: float = 1.0
     # User-uploaded init image (URL path, e.g. /outputs/_assets/<sha>.png).
     # When set: standalone uses it as the img2img init for pass-1;
     # compositions use it as the scene the QR art is composited into.
@@ -500,6 +505,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
             body.qr_monster_version if body.qr_monster_version in QR_MONSTER_VERSIONS
             else QR_MONSTER_DEFAULT
         ),
+        qr_coverage=max(0.40, min(body.qr_coverage, 1.0)),
         init_image_path=body.init_image_path,
         init_strength=max(0.05, min(body.init_strength, 0.95)),
         canny_scale=max(0.0, min(body.canny_scale, 1.5)),
@@ -530,6 +536,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         "adetailer_strength": req.adetailer_strength,
         "composition": composition,
         "qr_monster_version": req.qr_monster_version,
+        "qr_coverage": req.qr_coverage,
         "init_image_path": req.init_image_path,
         "init_strength": req.init_strength,
         "canny_scale": req.canny_scale,
@@ -605,6 +612,7 @@ def rerun_job(
         require_scan=bool(src["require_scan"]),
         auto_escalate=bool(src.get("auto_escalate", 1)),
         qr_monster_version=src.get("qr_monster_version") or QR_MONSTER_DEFAULT,
+        qr_coverage=src.get("qr_coverage") or 1.0,
         init_image_path=src.get("init_image_path"),
         init_strength=src.get("init_strength") or 0.65,
         canny_scale=src.get("canny_scale") or 0.0,

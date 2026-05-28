@@ -82,7 +82,7 @@ class Database:
             "id created_at status data prompt negative_prompt style model "
             "composition candidates steps guidance controlnet_scale tile_scale control_end "
             "refine refine_strength refine_steps size seed require_scan auto_escalate "
-            "qr_monster_version init_image_path init_strength canny_scale fast_mode "
+            "qr_monster_version qr_coverage init_image_path init_strength canny_scale fast_mode "
             "hires_fix hires_target hires_strength adetailer adetailer_strength "
             "client_ip user_agent parent_job_id"
         ).split()
@@ -97,6 +97,7 @@ class Database:
             body["size"], body.get("seed"), int(bool(body["require_scan"])),
             int(bool(body.get("auto_escalate", True))),
             body.get("qr_monster_version", "v1"),
+            body.get("qr_coverage", 1.0),
             body.get("init_image_path"),
             body.get("init_strength", 0.65),
             body.get("canny_scale", 0.0),

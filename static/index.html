@@ -464,6 +464,13 @@
     <div class="hint">Higher = QR scans more reliably but more visible. Photo-dominant band is 1.05–1.20; above 1.30 the grid pattern starts to dominate.</div>
 
     <div class="row" style="margin-top: 12px;">
+      <label>QR coverage</label>
+      <input type="range" id="qrCoverage" min="0.40" max="1.00" step="0.05" value="1.00" />
+      <span class="val" id="qrCoverageVal">1.00</span>
+    </div>
+    <div class="hint">How much of the canvas the QR occupies. 1.00 = QR fills the frame. 0.70–0.80 leaves a gray margin where the prompt's scene grows around the QR (tree canopies, temple clusters, cherry blossoms). The v2 community workflow's signature trick.</div>
+
+    <div class="row" style="margin-top: 12px;">
       <label>Tile guidance</label>
       <input type="range" id="tileScale" min="0.0" max="0.8" step="0.05" value="0.0" />
       <span class="val" id="tileScaleVal">0.00</span>
@@ -646,7 +653,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const ranges = [
-    "scale", "tileScale", "steps", "candidates", "refineStrength",
+    "scale", "qrCoverage", "tileScale", "steps", "candidates", "refineStrength",
     "hiresTarget", "hiresStrength", "adetailerStrength",
   ];
   ranges.forEach((id) => {
@@ -1136,6 +1143,7 @@
       style: $("style").value,
       model: $("model").value,
       qr_monster_version: $("qrMonsterVersion").value,
+      qr_coverage: parseFloat($("qrCoverage").value),
       composition: $("composition").value,
       init_image_path: initImageUrl,
       // UI exposes "preserve input" (more = more original); API takes
@@ -1564,6 +1572,7 @@
     $("size").value = j.size;
     $("seed").value = j.seed != null ? j.seed : "";
     if (j.qr_monster_version) $("qrMonsterVersion").value = j.qr_monster_version;
+    if (j.qr_coverage != null) setSlider("qrCoverage", j.qr_coverage);
     if (j.init_image_path) {
       // Restore the init image from the prior job — file is content-addressed
       // so we just need the URL. Strength stored on the job is diffusion
