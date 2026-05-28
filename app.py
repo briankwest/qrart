@@ -325,9 +325,17 @@ def _run_job(job: Job, cancelled: bool) -> None:
         print(f"[worker] early QR save failed: {_e}", flush=True)
         qr_path = None
 
+    # Track candidate DB ids in completion order (== idx for the main loop;
+    # any C1 rescue gets appended). Used after generate() for best-candidate
+    # selection and for post-processing updates on the winner.
+    candidate_ids: list[str] = []
+
     def _save_candidate(idx: int, cand) -> dict[str, Any]:
-        """Persist a candidate's image (and pass1) the instant the
-        generator finishes it, so the UI can render incrementally.
+        """Persist a candidate's image AND DB row the instant the generator
+        finishes it. This is what lets the UI render candidates
+        incrementally — and also what lets a cancelled job retain the
+        partial output the user already saw (the post-generate fallback
+        loop never runs on cancellation).
         Returns the URL fields that get merged into the candidate_done
         SSE event payload."""
         cand_path = job_dir / f"cand{idx}.png"
@@ -338,7 +346,20 @@ def _run_job(job: Job, cancelled: bool) -> None:
             pass1_path = job_dir / f"cand{idx}.pass1.png"
             cand.pass1_image.save(pass1_path)
             pass1_url = f"/outputs/{job.job_id}/cand{idx}.pass1.png"
-        return {"url": url, "pass1_url": pass1_url}
+        cid = db.insert_candidate(
+            job_id=job.job_id,
+            idx=idx,
+            seed=cand.seed,
+            controlnet_scale=cand.controlnet_scale,
+            refine_strength=cand.refine_strength,
+            scans=cand.scans,
+            decoded=cand.decoded,
+            image_path=url,
+            pass1_image_path=pass1_url,
+            scannability=cand.scannability,
+        )
+        candidate_ids.append(cid)
+        return {"url": url, "pass1_url": pass1_url, "candidate_id": cid}
 
     progress = Progress(
         publish=lambda type_, payload: db.insert_event(job.job_id, type_, payload),
@@ -349,13 +370,24 @@ def _run_job(job: Job, cancelled: bool) -> None:
     if qr_path is not None:
         progress.emit("qr_ready", url=f"/outputs/{job.job_id}/qr.png")
 
+    # Path the early QR save into a URL we can hand to finish_job — both
+    # the success and the cancel/fail paths benefit from having the QR
+    # image visible in history for partial-output jobs.
+    qr_url = f"/outputs/{job.job_id}/qr.png" if qr_path is not None and qr_path.exists() else None
+
     try:
         result = get_generator(job.model).generate(job.request, progress=progress)
     except CancelledByUser:
         elapsed = round(time.time() - t0, 2)
-        db.finish_job(job.job_id, status="cancelled", elapsed_s=elapsed)
+        db.finish_job(
+            job.job_id,
+            status="cancelled",
+            elapsed_s=elapsed,
+            qr_image_path=qr_url,
+            best_candidate_id=candidate_ids[0] if candidate_ids else None,
+        )
         progress.emit("cancelled")
-        print(f"[worker] {job.job_id} CANCELLED after {elapsed}s", flush=True)
+        print(f"[worker] {job.job_id} CANCELLED after {elapsed}s · partial candidates: {len(candidate_ids)}", flush=True)
         return
     except Exception as e:
         elapsed = round(time.time() - t0, 2)
@@ -364,6 +396,8 @@ def _run_job(job: Job, cancelled: bool) -> None:
             status="failed",
             elapsed_s=elapsed,
             error=f"{e}\n\n{traceback.format_exc()}",
+            qr_image_path=qr_url,
+            best_candidate_id=candidate_ids[0] if candidate_ids else None,
         )
         progress.emit("failed", error=str(e))
         print(f"[worker] {job.job_id} FAILED: {e}", flush=True)
@@ -371,22 +405,20 @@ def _run_job(job: Job, cancelled: bool) -> None:
 
     elapsed = round(time.time() - t0, 2)
 
-    # Candidate image files were already written incrementally by
-    # _save_candidate during generation (via Progress.on_candidate_ready),
-    # so the loop below only persists DB rows. The hires_fix / adetailer
-    # finishing passes may have replaced result.image post-loop with a
-    # different pixel set; overwrite the winner's cand{idx}.png so disk
-    # matches what the DB will point to.
-    candidate_ids: list[str] = []
+    # Candidates were saved incrementally (image + DB row) by _save_candidate
+    # during generation. Backstop only: if the rescue path or any future
+    # control flow appended a candidate without going through the callback,
+    # save+insert it now. Idempotent — skips any idx that's already in
+    # candidate_ids.
     for i, c in enumerate(result.candidates):
+        if i < len(candidate_ids):
+            continue
         cand_file = job_dir / f"cand{i}.png"
-        if not cand_file.exists():
-            c.image.save(cand_file)
+        c.image.save(cand_file)
         pass1_url: str | None = None
         if c.pass1_image is not None:
             pass1_file = job_dir / f"cand{i}.pass1.png"
-            if not pass1_file.exists():
-                c.pass1_image.save(pass1_file)
+            c.pass1_image.save(pass1_file)
             pass1_url = f"/outputs/{job.job_id}/cand{i}.pass1.png"
         cid = db.insert_candidate(
             job_id=job.job_id,
@@ -402,17 +434,22 @@ def _run_job(job: Job, cancelled: bool) -> None:
         )
         candidate_ids.append(cid)
 
-    # If the hires_fix / adetailer finishing pass ran, the winner
-    # candidate's .image has been replaced in-place with the post-processed
-    # version; the disk file still has the pre-hires pixels from the
-    # incremental save. Re-save to bring disk into sync.
+    # hires_fix / adetailer may have replaced the winner candidate's
+    # .image in-place. Re-save the file so the URL points at the
+    # post-processed pixels, and patch the DB row to match.
     best_idx_for_save = next(
         (i for i, c in enumerate(result.candidates) if c.image is result.image), -1
     )
     if best_idx_for_save >= 0:
-        result.candidates[best_idx_for_save].image.save(
-            job_dir / f"cand{best_idx_for_save}.png"
-        )
+        winner = result.candidates[best_idx_for_save]
+        winner.image.save(job_dir / f"cand{best_idx_for_save}.png")
+        if best_idx_for_save < len(candidate_ids):
+            db.update_candidate(
+                candidate_ids[best_idx_for_save],
+                scans=winner.scans,
+                decoded=winner.decoded,
+                scannability=winner.scannability,
+            )
 
     if qr_path is not None and not qr_path.exists():
         result.qr_image.save(qr_path)

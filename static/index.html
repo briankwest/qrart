@@ -1048,6 +1048,10 @@
 
   function setQrPreview(url) {
     const p = $("qrPreview");
+    if (!url) {
+      p.innerHTML = `<div class="placeholder" style="font-size:11px;">no QR image</div>`;
+      return;
+    }
     p.innerHTML = `<img src="${url}" alt="QR" />`;
   }
 
@@ -1379,9 +1383,14 @@
     });
     es.addEventListener("failed", async (e) => {
       const d = JSON.parse(e.data);
-      $("preview").innerHTML =
-        `<div class="placeholder"><strong>Failed</strong>${(d.error || "").split("\n")[0]}</div>`;
-      $("status").textContent = `Failed · job ${jobId}`;
+      // If candidates landed before the failure, keep them visible — only
+      // wipe to the Failed placeholder when there's literally nothing
+      // to show.
+      if (liveCandidates.length === 0) {
+        $("preview").innerHTML =
+          `<div class="placeholder"><strong>Failed</strong>${(d.error || "").split("\n")[0]}</div>`;
+      }
+      $("status").textContent = `Failed · job ${jobId}` + (d.error ? ` — ${d.error.split("\n")[0]}` : "");
       $("go").disabled = false;
       teardownStream();
       refreshHealth();
@@ -1390,8 +1399,16 @@
       loadStats();
     });
     es.addEventListener("cancelled", () => {
-      $("preview").innerHTML = `<div class="placeholder"><strong>Cancelled</strong></div>`;
-      $("status").textContent = `Cancelled · job ${jobId}`;
+      // Same as failed — preserve whatever the user already saw. The
+      // candidate images are on disk and the DB rows exist (saved
+      // incrementally), so clicking this job's row in history later will
+      // reload the partial output too.
+      if (liveCandidates.length === 0) {
+        $("preview").innerHTML = `<div class="placeholder"><strong>Cancelled</strong></div>`;
+      }
+      $("status").textContent = liveCandidates.length
+        ? `Cancelled · ${liveCandidates.length} candidate(s) saved · job ${jobId}`
+        : `Cancelled · job ${jobId}`;
       $("go").disabled = false;
       teardownStream();
       refreshHealth();
@@ -1432,8 +1449,19 @@
     setQrPreview(j.qr_image_path);
     renderGallery(cands, Math.max(0, bestIndex));
     if (cands.length) showCandidate(cands[bestIndex >= 0 ? bestIndex : 0]);
-    $("status").textContent =
-      `Done in ${j.elapsed_s}s · ${j.scans ? "decoded" : "did not decode"} · job ${j.id}`;
+    // Status line varies by status so cancelled/failed jobs don't lie
+    // about being "Done".
+    let statusLine;
+    if (j.status === "completed") {
+      statusLine = `Done in ${j.elapsed_s}s · ${j.scans ? "decoded" : "did not decode"}`;
+    } else if (j.status === "cancelled") {
+      statusLine = `Cancelled · ${cands.length} candidate(s) saved before cancel`;
+    } else if (j.status === "failed") {
+      statusLine = `Failed · ${cands.length} candidate(s) saved before error`;
+    } else {
+      statusLine = `${j.status} · ${cands.length} candidate(s)`;
+    }
+    $("status").textContent = `${statusLine} · job ${j.id}`;
   }
 
   // ── History panel ────────────────────────────────────────────────────────
@@ -1561,7 +1589,10 @@
       const r = await fetch(`/api/jobs/${jobId}`);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
-      if (j.status !== "completed" || !(j.candidate_list || []).length) {
+      // Accept ANY status that has at least one candidate on disk —
+      // cancelled and failed jobs retain their partial output now that
+      // DB inserts happen incrementally during generation.
+      if (!(j.candidate_list || []).length) {
         $("status").textContent = `Job ${jobId} (${j.status}) has no viewable candidates`;
         return;
       }

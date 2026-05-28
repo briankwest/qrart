@@ -309,12 +309,20 @@ class Generator:
             rescue = self._make_candidate(
                 rescue_req, comp, best.seed + 1, prompt, negative, rescue_progress,
             )
+            candidates.append(rescue)
+            # Persist the rescue immediately so it's saved + DB-inserted like
+            # the regular candidates. Without this it'd only be saved via
+            # the post-generate backstop loop, which doesn't run on cancel.
+            if progress.on_candidate_ready is not None:
+                try:
+                    progress.on_candidate_ready(len(candidates) - 1, rescue)
+                except Exception as e:
+                    print(f"[gen] on_candidate_ready (rescue) failed: {e}", flush=True)
             progress.emit(
                 "rescue_done",
                 scans=rescue.scans,
                 score=round(rescue.scannability, 3),
             )
-            candidates.append(rescue)
             # Re-pick best including the rescue candidate.
             best = sorted(
                 candidates,

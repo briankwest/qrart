@@ -233,6 +233,36 @@ class Database:
             )
         return cid
 
+    def update_candidate(
+        self,
+        candidate_id: str,
+        *,
+        scans: bool | None = None,
+        decoded: str | None = None,
+        scannability: float | None = None,
+    ) -> None:
+        """Patch a candidate row. Used after hires_fix / adetailer mutate
+        the winner's image in-place so its scan + score fields reflect the
+        post-processed pixels, not the original incremental save."""
+        sets: list[str] = []
+        vals: list[Any] = []
+        if scans is not None:
+            sets.append("scans = ?")
+            vals.append(int(bool(scans)))
+        if decoded is not None:
+            sets.append("decoded = ?")
+            vals.append(decoded)
+        if scannability is not None:
+            sets.append("scannability = ?")
+            vals.append(scannability)
+        if not sets:
+            return
+        vals.append(candidate_id)
+        with self._write_lock:
+            self.conn.execute(
+                f"UPDATE candidates SET {', '.join(sets)} WHERE id = ?", vals,
+            )
+
     # ── Events (used by phase 3 SSE) ─────────────────────────────────────────
     def insert_event(self, job_id: str, event_type: str, payload: dict[str, Any]) -> None:
         with self._write_lock:
