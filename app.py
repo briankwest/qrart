@@ -22,6 +22,7 @@ from qrart.pipeline import (
     MODELS,
     QR_MONSTER_VERSIONS,
     QR_MONSTER_DEFAULT,
+    QRART_SAMPLER,
     CancelledByUser,
 )
 from qrart.worker import Job, MAX_QUEUED, QueueFull, Worker
@@ -150,7 +151,7 @@ class GenerateBody(BaseModel):
     model: str = "photoreal"
     negative_prompt: str | None = None
     candidates: int = 5
-    steps: int = 28
+    steps: int = 32
     controlnet_scale: float = 1.10
     tile_scale: float = 0.0
     control_end: float = 1.0
@@ -198,6 +199,7 @@ def health() -> dict[str, Any]:
         "base_model": g.pipeline.base_model,
         "qr_monster_default": QR_MONSTER_DEFAULT,
         "qr_monster_versions": list(QR_MONSTER_VERSIONS),
+        "sampler": QRART_SAMPLER,
         "styles": list(STYLE_PRESETS.keys()),
         "compositions": list(COMPOSITIONS.keys()),
         "models": list(MODELS.keys()),

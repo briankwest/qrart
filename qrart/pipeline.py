@@ -5,9 +5,11 @@ import torch
 from diffusers import (
     StableDiffusionPipeline,
     StableDiffusionControlNetPipeline,
+    StableDiffusionControlNetImg2ImgPipeline,
     StableDiffusionImg2ImgPipeline,
     ControlNetModel,
     AutoencoderKL,
+    DPMSolverMultistepScheduler,
     EulerAncestralDiscreteScheduler,
     LCMScheduler,
 )
@@ -37,6 +39,28 @@ CONTROLNET_ID = _MONSTER_REPO
 
 def _qr_monster_subfolder(version: str) -> str | None:
     return "v2" if version == "v2" else None
+
+
+# Sampler choice. Euler-Ancestral is the default — numerically stable on MPS
+# even in fp16. DPM++ 2M Karras (non-SDE) is the community standard for QR
+# Monster outputs; produces sharper detail at the same step count. Should be
+# MPS-safe but hasn't been battle-tested on every model in our list, so it's
+# opt-in via env. SDE variants of DPM++ are known NaN sources on MPS — we
+# don't expose those.
+QRART_SAMPLER = _os.environ.get("QRART_SAMPLER", "euler_a").lower()
+SAMPLER_CHOICES = ("euler_a", "dpm_karras")
+if QRART_SAMPLER not in SAMPLER_CHOICES:
+    QRART_SAMPLER = "euler_a"
+
+
+def _build_scheduler(config):
+    if QRART_SAMPLER == "dpm_karras":
+        return DPMSolverMultistepScheduler.from_config(
+            config,
+            algorithm_type="dpmsolver++",
+            use_karras_sigmas=True,
+        )
+    return EulerAncestralDiscreteScheduler.from_config(config)
 
 # Tile ControlNet — when stacked alongside QR Monster, it adds a coherence /
 # detail-preservation signal that pushes outputs toward photo (less QR-noisy)
@@ -149,6 +173,12 @@ class QRArtPipeline:
         self.use_external_vae = use_external_vae
         self._pipe: StableDiffusionControlNetPipeline | None = None
         self._refiner: StableDiffusionImg2ImgPipeline | None = None
+        # ControlNet-aware refine pipe. Shares all weights with _pipe so it
+        # costs zero extra memory — img2img + the same multi-controlnet
+        # (QR + Tile) keeps the QR pattern locked while img2img polishes
+        # toward photoreal. Without this, the plain _refiner erodes the QR
+        # pattern (~5-15% of pixels lost to the prompt each refine pass).
+        self._cn_refiner: StableDiffusionControlNetImg2ImgPipeline | None = None
         # Scene pipe (txt2img, no ControlNet) for stage A of paste-composite
         # compositions — shares weights with the main pipe; created lazily.
         self._scene_pipe: StableDiffusionPipeline | None = None
@@ -198,22 +228,41 @@ class QRArtPipeline:
         pipe = StableDiffusionControlNetPipeline.from_pretrained(
             self.base_model, controlnet=controlnets, **kwargs
         )
-        # Euler-Ancestral is numerically stable on MPS; SDE-DPM variants tend to
-        # produce NaN outputs in lower precision on Apple Silicon.
-        pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
-        # Save the original scheduler config so we can restore it when toggling
-        # back from Fast mode (LCM) to Quality.
+        # Scheduler choice — Euler-Ancestral by default; DPM++ 2M Karras
+        # available via QRART_SAMPLER=dpm_karras. The original scheduler
+        # config is captured BEFORE the swap so set_fast_mode can restore
+        # the right Quality-mode scheduler later.
+        pipe.scheduler = _build_scheduler(pipe.scheduler.config)
         self._default_scheduler_config = dict(pipe.scheduler.config)
         pipe = pipe.to(self.device)
         if self.device != "cpu":
             pipe.enable_attention_slicing()
         self._pipe = pipe
 
+        # Plain img2img refiner — used by hires_fix and adetailer_faces, which
+        # operate on the final winner image where the QR pattern is already
+        # locked. Light strength (0.15-0.25) avoids erasing it.
         self._refiner = StableDiffusionImg2ImgPipeline(
             vae=pipe.vae,
             text_encoder=pipe.text_encoder,
             tokenizer=pipe.tokenizer,
             unet=pipe.unet,
+            scheduler=pipe.scheduler,
+            safety_checker=None,
+            feature_extractor=pipe.feature_extractor,
+            requires_safety_checker=False,
+        )
+
+        # ControlNet-aware img2img refiner — used by the main refine pass.
+        # Shares the SAME multi-controlnet instance as _pipe, so when we
+        # swap pipe.controlnet.nets[0] for v1/v2 selection, the refiner
+        # sees it automatically.
+        self._cn_refiner = StableDiffusionControlNetImg2ImgPipeline(
+            vae=pipe.vae,
+            text_encoder=pipe.text_encoder,
+            tokenizer=pipe.tokenizer,
+            unet=pipe.unet,
+            controlnet=pipe.controlnet,
             scheduler=pipe.scheduler,
             safety_checker=None,
             feature_extractor=pipe.feature_extractor,
@@ -282,13 +331,14 @@ class QRArtPipeline:
             self._pipe.enable_lora()
         else:
             assert self._default_scheduler_config is not None
-            self._pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(
-                self._default_scheduler_config
-            )
+            self._pipe.scheduler = _build_scheduler(self._default_scheduler_config)
             if self._lcm_loaded:
                 self._pipe.disable_lora()
-        # Keep all sibling pipes (refiner, scene, inpaint) on the same scheduler.
+        # Keep all sibling pipes (plain refiner, ControlNet refiner, scene)
+        # on the same scheduler so they stay in sync with Fast/Quality mode.
         self._refiner.scheduler = self._pipe.scheduler
+        if self._cn_refiner is not None:
+            self._cn_refiner.scheduler = self._pipe.scheduler
         if self._scene_pipe is not None:
             self._scene_pipe.scheduler = self._pipe.scheduler
         self._fast_mode = fast
@@ -375,6 +425,9 @@ class QRArtPipeline:
         image: Image.Image,
         prompt: str,
         *,
+        qr_image: Image.Image,
+        controlnet_scale: float,
+        tile_scale: float,
         negative_prompt: str,
         strength: float,
         steps: int,
@@ -383,23 +436,35 @@ class QRArtPipeline:
         step_callback: StepCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> Image.Image:
-        """img2img pass with no ControlNet — smooths QR-textured pass-1 output
-        into photorealism while preserving enough structure to still scan.
+        """img2img refine with the same QR+Tile multi-controlnet attached so
+        the QR pattern is preserved while the prompt polishes the photo.
+
+        Without ControlNet during refine, plain img2img at strength 0.30
+        erodes the QR by 5-15% per pass — the prompt steers pixels back
+        toward "just a photo." With ControlNet, the QR signal is re-imposed
+        each step, so we can polish more aggressively without losing scan.
+
+        Caller passes the same controlnet_scale + tile_scale used in pass 1.
+        We don't reduce them here; the img2img strength parameter already
+        constrains how much can change per step.
         """
         self.load()
-        assert self._refiner is not None
+        assert self._cn_refiner is not None
         gen = (
             torch.Generator(device="cpu").manual_seed(seed + 7919)
             if seed is not None
             else None
         )
-        out = self._refiner(
+        qr = qr_image.resize(image.size)
+        out = self._cn_refiner(
             prompt=prompt,
             negative_prompt=negative_prompt,
             image=image,
+            control_image=[qr, qr],
             strength=strength,
             num_inference_steps=steps,
             guidance_scale=guidance,
+            controlnet_conditioning_scale=[controlnet_scale, tile_scale],
             generator=gen,
             callback_on_step_end=_make_diffusers_callback(step_callback, cancel_check),
         )

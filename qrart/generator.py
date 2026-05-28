@@ -58,7 +58,7 @@ class GenerationRequest:
     style: str = "photoreal"
     negative_prompt: str | None = None  # overrides the style's default negative
     candidates: int = 5
-    steps: int = 28
+    steps: int = 32
     guidance: float = 7.5
     # Photo-dominant band: 1.05–1.20. Below 1.05 the QR usually doesn't decode;
     # above 1.20 the grid pattern starts to dominate. With 5+ candidates, scan
@@ -400,6 +400,9 @@ class Generator:
             )
             qr_refined = self.pipeline.refine(
                 image=qr_pass1,
+                qr_image=comp.qr_image,
+                controlnet_scale=req.controlnet_scale,
+                tile_scale=req.tile_scale,
                 prompt=prompt,
                 negative_prompt=negative,
                 strength=strength,
