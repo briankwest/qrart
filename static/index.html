@@ -340,6 +340,46 @@
   a.action { font-size: 12px; color: var(--accent-2); text-decoration: none; border:1px solid var(--border); padding:6px 12px; border-radius:8px; }
   a.action:hover { border-color: var(--accent); }
 
+  /* Form groups — bordered sections that visually unify related controls.
+     Each section has a number, title, and a one-line subtitle so the user
+     can scan the form's structure at a glance. */
+  .form-group {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 14px 16px;
+    margin-top: 14px;
+    background: rgba(28,28,34,0.4);
+  }
+  .form-group:first-of-type { margin-top: 0; }
+  .form-group-title {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 12px; font-size: 13px; font-weight: 700;
+    letter-spacing: 0.4px; text-transform: uppercase; color: var(--text);
+  }
+  .form-group-title .num {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+    color: var(--accent-2); border: 1px solid rgba(0,212,255,0.3);
+    border-radius: 4px; padding: 2px 6px; background: rgba(0,212,255,0.06);
+    letter-spacing: 0;
+  }
+  .form-group-title .sub {
+    font-size: 11px; font-weight: 400; text-transform: none;
+    color: var(--muted); letter-spacing: 0; margin-left: auto;
+    text-align: right; max-width: 60%;
+  }
+  /* Tighter spacing for elements inside form-groups since the border
+     already provides visual separation. */
+  .form-group > label { margin-top: 10px; }
+  .form-group > label:first-child,
+  .form-group > .form-group-title + label,
+  .form-group > .form-group-title + .row,
+  .form-group > .form-group-title + .toggle-row,
+  .form-group > .form-group-title + select,
+  .form-group > .form-group-title + textarea,
+  .form-group > .form-group-title + div { margin-top: 0; }
+  .form-group .toggle-row { padding: 10px 0; border-top: 1px solid var(--border); }
+  .form-group .toggle-row:first-of-type { border-top: 0; padding-top: 4px; }
+
   /* Settings-used panel */
   .settings-panel {
     margin-top: 12px; border: 1px solid var(--border); border-radius: 8px;
@@ -392,274 +432,311 @@
 
 <main>
   <section class="panel">
-    <h2>Input</h2>
 
-    <label for="qrType">QR type</label>
-    <select id="qrType">
-      <option value="url" selected>URL</option>
-      <option value="text">Plain text</option>
-      <option value="email">Email</option>
-      <option value="phone">Phone</option>
-      <option value="sms">SMS</option>
-      <option value="wifi">WiFi</option>
-      <option value="vcard">Contact (vCard)</option>
-      <option value="geo">Location</option>
-    </select>
-    <div id="qrFields" style="margin-top: 8px;"></div>
-    <details style="margin-top: 8px;">
-      <summary style="font-size: 11px; color: var(--muted); cursor: pointer;">Encoded payload preview</summary>
-      <pre id="payloadPreview" style="margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto;"></pre>
-    </details>
-
-    <label>Init image <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
-    <div id="initZone" class="init-zone empty">
-      <div class="init-preview" id="initPreview" style="display:none;"></div>
-      <div class="init-body" id="initBody">
-        <b>Drop an image</b> or click to upload. Standalone: QR is hidden in your image. Composition: your image becomes the scene.
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">1</span> <span>What to encode</span>
+        <span class="sub">The payload the QR will contain</span>
       </div>
-      <button type="button" class="init-clear" id="initClear" style="display:none;">✕ clear</button>
-      <input type="file" id="initFile" accept="image/png,image/jpeg,image/webp" />
-    </div>
-    <div id="initStrengthRow" class="row" style="display:none;margin-bottom:8px;">
-      <label for="preserveInput">Preserve input</label>
-      <input type="range" id="preserveInput" min="0.05" max="0.95" step="0.01" value="0.35" />
-      <span class="val" id="preserveInputVal">0.35</span>
-    </div>
-    <div class="hint" id="initStrengthHint" style="display:none;">
-      Higher = keep more of your image; lower = more reimagined. 0.35 is a good "hide QR in this photo" starting point.
-    </div>
-    <div id="cannyScaleRow" class="row" style="display:none;margin-bottom:8px;">
-      <label for="cannyScale">Logo structure</label>
-      <input type="range" id="cannyScale" min="0.0" max="1.2" step="0.01" value="0.0" />
-      <span class="val" id="cannyScaleVal">0.0</span>
-    </div>
-    <div class="hint" id="cannyScaleHint" style="display:none;">
-      Stack a Canny edge ControlNet on your image. 0 = off. 0.5–0.8 = QR modules cluster along your logo's edges (best for logo-shaped QRs). ≥ 1.0 dominates over QR Monster.
+      <label for="qrType">QR type</label>
+      <select id="qrType">
+        <option value="url" selected>URL</option>
+        <option value="text">Plain text</option>
+        <option value="email">Email</option>
+        <option value="phone">Phone</option>
+        <option value="sms">SMS</option>
+        <option value="wifi">WiFi</option>
+        <option value="vcard">Contact (vCard)</option>
+        <option value="geo">Location</option>
+      </select>
+      <div id="qrFields" style="margin-top: 8px;"></div>
+      <details style="margin-top: 8px;">
+        <summary style="font-size: 11px; color: var(--muted); cursor: pointer;">Encoded payload preview</summary>
+        <pre id="payloadPreview" style="margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto;"></pre>
+      </details>
     </div>
 
-    <label for="prompt">Prompt</label>
-    <div id="promptPicker" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px;max-height:90px;overflow-y:auto;"></div>
-    <textarea id="prompt" placeholder="describe what the image should look like">a majestic snow leopard standing on a cliff at sunrise, dramatic lighting, mountains in background</textarea>
-
-    <label for="negativePrompt">Negative prompt <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
-    <textarea id="negativePrompt" placeholder="leave blank to use the style preset's default negative" style="min-height: 50px;"></textarea>
-    <div class="hint">If set, REPLACES the style preset's default negative entirely (it doesn't append). Useful when the style default is fighting your prompt — e.g. the photoreal preset's "illustration, render" negative blocks intentional stylized output.</div>
-
-    <label for="model">Model</label>
-    <select id="model">
-      <optgroup label="Strongest photo prior (best for hidden-QR)">
-        <option value="photoreal" selected>Realistic Vision V6 — all-around photoreal (default)</option>
-        <option value="photoreal-v51">Realistic Vision V5.1 — slightly softer than V6</option>
-        <option value="majicmix">majicMIX Realistic v6 — warm cinematic skin tones, faces</option>
-        <option value="epicphoto">epiCPhotoGasm — editorial-magazine sharpness</option>
-        <option value="cyberrealistic">CyberRealistic — crisp modern photography</option>
-        <option value="hyperrealism">HyperRealism — pore-level micro-detail</option>
-        <option value="absolute-v18">AbsoluteReality v1.8.1 — balanced, fine mid-tones</option>
-      </optgroup>
-      <optgroup label="Stylistic finetunes">
-        <option value="photon">Photon V1 — natural landscapes, warm/film feel</option>
-        <option value="epic">epiCRealism — sharp, dramatic, high-detail</option>
-        <option value="absolute">AbsoluteReality v1 — versatile, balanced</option>
-        <option value="analog">Analog Diffusion — film grain, 70s/80s aesthetic</option>
-        <option value="dreamlike">Dreamlike Photoreal 2.0 — soft, golden, painterly</option>
-        <option value="openjourney">OpenJourney v4 — Midjourney-style, moody/cinematic</option>
-        <option value="dreamshaper">DreamShaper 8 — stylized/painterly</option>
-      </optgroup>
-    </select>
-    <div class="hint" id="modelHint">Each model is ~4GB and downloaded on first use. Switch between them to compare aesthetics.</div>
-
-    <label for="qrMonsterVersion">QR Monster ControlNet</label>
-    <select id="qrMonsterVersion">
-      <option value="v1" selected>v1 — original (scale ~1.10–1.20 for scans)</option>
-      <option value="v2">v2 — stronger QR signal (scale ~0.95–1.05 for scans)</option>
-    </select>
-    <div class="hint">v2 hides the QR more cleanly at lower scales but can over-dominate at v1's scale settings — drop scale ~0.10 if you switch.</div>
-
-    <label for="style">Style</label>
-    <select id="style">
-      <option value="photoreal" selected>photoreal</option>
-      <option value="cinematic">cinematic</option>
-      <option value="illustration">illustration</option>
-      <option value="custom">custom (no auto-suffix)</option>
-    </select>
-    <div class="hint">Photoreal pairs best with the refine pass for that "looks like a photo" finish.</div>
-
-    <label for="composition">Composition</label>
-    <select id="composition">
-      <option value="standalone" selected>Standalone — QR fills frame (768×768)</option>
-      <option value="subject-portrait">Subject + QR — character above, QR below (768×1024)</option>
-      <option value="scene-landscape">QR scene — wide landscape, QR as monolith (1024×768)</option>
-      <option value="garment">QR garment — fashion shot, QR is the outfit (768×1024)</option>
-    </select>
-    <div class="hint" id="compositionHint">QR fills the entire frame. Other options place the QR as a feature inside a larger scene (~1.5–2× slower).</div>
-    <svg id="compositionDiagram" viewBox="0 0 100 100" style="width:100%; max-width:140px; margin-top:6px; display:block;">
-      <rect x="0" y="0" width="100" height="100" fill="#16161a" stroke="#232329" />
-      <rect id="diagramQR" x="0" y="0" width="100" height="100" fill="url(#qrPattern)" stroke="#7c5cff" stroke-width="0.5" />
-      <defs>
-        <pattern id="qrPattern" patternUnits="userSpaceOnUse" width="6" height="6">
-          <rect width="6" height="6" fill="#1a1a20" />
-          <rect x="0" y="0" width="3" height="3" fill="#5a5a64" />
-          <rect x="3" y="3" width="3" height="3" fill="#5a5a64" />
-        </pattern>
-      </defs>
-    </svg>
-
-    <h2 style="margin-top: 22px;">Tuning</h2>
-
-    <div class="row">
-      <label>QR strength</label>
-      <input type="range" id="scale" min="0.8" max="2.0" step="0.01" value="1.10" />
-      <span class="val" id="scaleVal">1.10</span>
-    </div>
-    <div class="hint">Higher = QR scans more reliably but more visible. Photo-dominant band is 1.05–1.20; above 1.30 the grid pattern starts to dominate.</div>
-
-    <div class="row" style="margin-top: 12px;">
-      <label>QR coverage</label>
-      <input type="range" id="qrCoverage" min="0.40" max="1.00" step="0.01" value="1.00" />
-      <span class="val" id="qrCoverageVal">1.00</span>
-    </div>
-    <div class="hint">How much of the canvas the QR occupies. 1.00 = QR fills the frame. 0.70–0.80 leaves a gray margin where the prompt's scene grows around the QR (tree canopies, temple clusters, cherry blossoms). The v2 community workflow's signature trick.</div>
-
-    <div class="row" style="margin-top: 12px;">
-      <label>Tile guidance</label>
-      <input type="range" id="tileScale" min="0.0" max="0.8" step="0.01" value="0.0" />
-      <span class="val" id="tileScaleVal">0.00</span>
-    </div>
-    <div class="hint">Stacks Tile ControlNet alongside QR Monster. 0 = off; 0.3–0.5 nudges output toward photo coherence (less QR-noise).</div>
-
-    <div class="row" style="margin-top: 12px;">
-      <label>Control start</label>
-      <input type="range" id="controlStart" min="0.0" max="0.9" step="0.01" value="0.30" />
-      <span class="val" id="controlStartVal">0.30</span>
-    </div>
-    <div class="row" style="margin-top: 6px;">
-      <label>Control end</label>
-      <input type="range" id="controlEnd" min="0.10" max="1.00" step="0.01" value="0.95" />
-      <span class="val" id="controlEndVal">0.95</span>
-    </div>
-    <div class="hint">ControlNet active window (fraction of diffusion steps). 0.30 → 0.95 is the v2 community sweet spot: the first 30% paints the scene freely from the prompt, QR Monster shapes it 30–95%, the last 5% finishes naturally. Set start=0 + end=1.0 for legacy full-window behavior.</div>
-
-    <div class="row" style="margin-top: 12px;">
-      <label>Steps</label>
-      <input type="range" id="steps" min="15" max="60" step="1" value="32" />
-      <span class="val" id="stepsVal">28</span>
-    </div>
-
-    <div class="row" style="margin-top: 12px;">
-      <label>Candidates</label>
-      <input type="range" id="candidates" min="1" max="8" step="1" value="5" />
-      <span class="val" id="candidatesVal">5</span>
-    </div>
-
-    <div class="grid-2" style="margin-top: 12px;">
-      <div>
-        <label for="seed">Seed (blank = random)</label>
-        <input type="number" id="seed" placeholder="random" />
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">2</span> <span>Init image <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">(optional)</span></span>
+        <span class="sub">Seed the diffusion with your own photo</span>
       </div>
-      <div>
-        <label for="size">Size</label>
-        <input type="number" id="size" value="768" min="512" max="1024" step="64" />
-      </div>
-    </div>
-
-    <details class="settings-panel" id="advancedPanel" style="margin-top: 12px;">
-      <summary><span>Advanced</span></summary>
-      <div class="settings-body">
-        <div class="row" style="margin-top: 8px;">
-          <label>CFG (guidance)</label>
-          <input type="range" id="guidance" min="1.0" max="15.0" step="0.1" value="7.5" />
-          <span class="val" id="guidanceVal">7.5</span>
+      <div id="initZone" class="init-zone empty">
+        <div class="init-preview" id="initPreview" style="display:none;"></div>
+        <div class="init-body" id="initBody">
+          <b>Drop an image</b> or click to upload. Standalone: QR is hidden in your image. Composition: your image becomes the scene.
         </div>
-        <div class="hint">How tightly the diffusion sticks to the prompt. 5–9 is the practical photoreal range; 7.5 is the SD 1.5 default. Fast mode overrides to ~1.5 server-side regardless of this value.</div>
+        <button type="button" class="init-clear" id="initClear" style="display:none;">✕ clear</button>
+        <input type="file" id="initFile" accept="image/png,image/jpeg,image/webp" />
+      </div>
+      <div id="initStrengthRow" class="row" style="display:none;margin-top:10px;">
+        <label for="preserveInput">Preserve input</label>
+        <input type="range" id="preserveInput" min="0.05" max="0.95" step="0.01" value="0.35" />
+        <span class="val" id="preserveInputVal">0.35</span>
+      </div>
+      <div class="hint" id="initStrengthHint" style="display:none;">
+        Higher = keep more of your image; lower = more reimagined. 0.35 is a good "hide QR in this photo" starting point.
+      </div>
+      <div id="cannyScaleRow" class="row" style="display:none;margin-top:10px;">
+        <label for="cannyScale">Logo structure</label>
+        <input type="range" id="cannyScale" min="0.0" max="1.2" step="0.01" value="0.0" />
+        <span class="val" id="cannyScaleVal">0.0</span>
+      </div>
+      <div class="hint" id="cannyScaleHint" style="display:none;">
+        Stack a Canny edge ControlNet on your image. 0 = off. 0.5–0.8 = QR modules cluster along your logo's edges (best for logo-shaped QRs). ≥ 1.0 dominates over QR Monster.
+      </div>
+    </div>
 
-        <div class="row" style="margin-top: 12px;">
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">3</span> <span>Prompt</span>
+        <span class="sub">What the image should look like</span>
+      </div>
+      <label for="prompt">Prompt</label>
+      <div id="promptPicker" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px;max-height:90px;overflow-y:auto;"></div>
+      <textarea id="prompt" placeholder="describe what the image should look like">a majestic snow leopard standing on a cliff at sunrise, dramatic lighting, mountains in background</textarea>
+
+      <label for="negativePrompt">Negative prompt <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+      <textarea id="negativePrompt" placeholder="leave blank to use the style preset's default negative" style="min-height: 50px;"></textarea>
+      <div class="hint">If set, REPLACES the style preset's default negative entirely. Useful when the style default fights your prompt.</div>
+
+      <label for="style">Style preset</label>
+      <select id="style">
+        <option value="photoreal" selected>photoreal</option>
+        <option value="cinematic">cinematic</option>
+        <option value="illustration">illustration</option>
+        <option value="custom">custom (no auto-suffix)</option>
+      </select>
+      <div class="hint">Appends a positive suffix (RAW photo / 8k / DSLR etc. for photoreal) and a default negative. Choose <code>custom</code> to send your prompt verbatim.</div>
+    </div>
+
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">4</span> <span>Model &amp; ControlNet</span>
+        <span class="sub">Which weights drive the diffusion + the QR</span>
+      </div>
+      <label for="model">Base model</label>
+      <select id="model">
+        <optgroup label="Strongest photo prior (best for hidden-QR)">
+          <option value="photoreal" selected>Realistic Vision V6 — all-around photoreal (default)</option>
+          <option value="photoreal-v51">Realistic Vision V5.1 — slightly softer than V6</option>
+          <option value="majicmix">majicMIX Realistic v6 — warm cinematic skin tones, faces</option>
+          <option value="epicphoto">epiCPhotoGasm — editorial-magazine sharpness</option>
+          <option value="cyberrealistic">CyberRealistic — crisp modern photography</option>
+          <option value="hyperrealism">HyperRealism — pore-level micro-detail</option>
+          <option value="absolute-v18">AbsoluteReality v1.8.1 — balanced, fine mid-tones</option>
+        </optgroup>
+        <optgroup label="Stylistic finetunes">
+          <option value="photon">Photon V1 — natural landscapes, warm/film feel</option>
+          <option value="epic">epiCRealism — sharp, dramatic, high-detail</option>
+          <option value="absolute">AbsoluteReality v1 — versatile, balanced</option>
+          <option value="analog">Analog Diffusion — film grain, 70s/80s aesthetic</option>
+          <option value="dreamlike">Dreamlike Photoreal 2.0 — soft, golden, painterly</option>
+          <option value="openjourney">OpenJourney v4 — Midjourney-style, moody/cinematic</option>
+          <option value="dreamshaper">DreamShaper 8 — stylized/painterly</option>
+        </optgroup>
+      </select>
+      <div class="hint" id="modelHint">Each model is ~4GB and downloaded on first use. Switch between them to compare aesthetics.</div>
+
+      <label for="qrMonsterVersion">QR Monster version</label>
+      <select id="qrMonsterVersion">
+        <option value="v1" selected>v1 — original (scale ~1.10–1.20 for scans)</option>
+        <option value="v2">v2 — stronger QR signal (scale ~0.95–1.05 for scans)</option>
+      </select>
+      <div class="hint">v2 hides the QR more cleanly at lower scales but can over-dominate at v1's scale settings. The scale slider auto-adjusts on swap.</div>
+
+      <label for="composition">Composition</label>
+      <select id="composition">
+        <option value="standalone" selected>Standalone — QR fills frame (768×768)</option>
+        <option value="subject-portrait">Subject + QR — character above, QR below (768×1024)</option>
+        <option value="scene-landscape">QR scene — wide landscape, QR as monolith (1024×768)</option>
+        <option value="garment">QR garment — fashion shot, QR is the outfit (768×1024)</option>
+      </select>
+      <div class="hint" id="compositionHint">QR fills the entire frame. Other options place the QR as a feature inside a larger scene (~1.5–2× slower).</div>
+      <svg id="compositionDiagram" viewBox="0 0 100 100" style="width:100%; max-width:140px; margin-top:6px; display:block;">
+        <rect x="0" y="0" width="100" height="100" fill="#16161a" stroke="#232329" />
+        <rect id="diagramQR" x="0" y="0" width="100" height="100" fill="url(#qrPattern)" stroke="#7c5cff" stroke-width="0.5" />
+        <defs>
+          <pattern id="qrPattern" patternUnits="userSpaceOnUse" width="6" height="6">
+            <rect width="6" height="6" fill="#1a1a20" />
+            <rect x="0" y="0" width="3" height="3" fill="#5a5a64" />
+            <rect x="3" y="3" width="3" height="3" fill="#5a5a64" />
+          </pattern>
+        </defs>
+      </svg>
+    </div>
+
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">5</span> <span>QR conditioning</span>
+        <span class="sub">How hard the ControlNets pull the diffusion</span>
+      </div>
+      <div class="row">
+        <label>QR strength</label>
+        <input type="range" id="scale" min="0.8" max="2.0" step="0.01" value="1.10" />
+        <span class="val" id="scaleVal">1.10</span>
+      </div>
+      <div class="hint">QR Monster conditioning weight. <b>1.05–1.20</b> for v1, <b>0.95–1.05</b> for v2. Above 1.30 the grid starts to dominate.</div>
+
+      <div class="row" style="margin-top: 12px;">
+        <label>QR coverage</label>
+        <input type="range" id="qrCoverage" min="0.40" max="1.00" step="0.01" value="1.00" />
+        <span class="val" id="qrCoverageVal">1.00</span>
+      </div>
+      <div class="hint">How much of the canvas the QR occupies. <b>1.00</b> = fills frame. <b>0.70–0.80</b> leaves a gray margin where the prompt's scene grows around the QR — the community v2 trick.</div>
+
+      <div class="row" style="margin-top: 12px;">
+        <label>Tile guidance</label>
+        <input type="range" id="tileScale" min="0.0" max="0.8" step="0.01" value="0.0" />
+        <span class="val" id="tileScaleVal">0.00</span>
+      </div>
+      <div class="hint">Stacks Tile ControlNet for photo coherence. 0 = off; <b>0.3–0.5</b> reduces QR-grid noise. ≥ 0.6 weakens the QR.</div>
+
+      <div class="row" style="margin-top: 12px;">
+        <label>Control start</label>
+        <input type="range" id="controlStart" min="0.0" max="0.9" step="0.01" value="0.30" />
+        <span class="val" id="controlStartVal">0.30</span>
+      </div>
+      <div class="row" style="margin-top: 6px;">
+        <label>Control end</label>
+        <input type="range" id="controlEnd" min="0.10" max="1.00" step="0.01" value="0.95" />
+        <span class="val" id="controlEndVal">0.95</span>
+      </div>
+      <div class="hint">ControlNet active window (fraction of steps). Default <b>0.30 → 0.95</b>: first 30% paints scene freely, QR Monster shapes 30–95%, last 5% finishes naturally. Use <b>0.00 → 1.00</b> for legacy full-window.</div>
+    </div>
+
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">6</span> <span>Diffusion</span>
+        <span class="sub">Sampling + reproducibility</span>
+      </div>
+      <div class="row">
+        <label>Steps</label>
+        <input type="range" id="steps" min="15" max="60" step="1" value="32" />
+        <span class="val" id="stepsVal">32</span>
+      </div>
+      <div class="hint">Diffusion iterations. <b>28–40</b> is the practical range. Fast mode overrides to 6.</div>
+
+      <div class="row" style="margin-top: 12px;">
+        <label>Candidates</label>
+        <input type="range" id="candidates" min="1" max="8" step="1" value="5" />
+        <span class="val" id="candidatesVal">5</span>
+      </div>
+      <div class="hint">How many seeds to try in parallel. Best by (scans, score, scale) becomes the result; others are saved alongside.</div>
+
+      <div class="row" style="margin-top: 12px;">
+        <label>CFG (guidance)</label>
+        <input type="range" id="guidance" min="1.0" max="15.0" step="0.1" value="7.5" />
+        <span class="val" id="guidanceVal">7.5</span>
+      </div>
+      <div class="hint">How tightly the diffusion sticks to the prompt. <b>5–9</b> is the practical photoreal range. Fast mode overrides to ~1.5.</div>
+
+      <div class="grid-2" style="margin-top: 12px;">
+        <div>
+          <label for="seed">Seed (blank = random)</label>
+          <input type="number" id="seed" placeholder="random" />
+        </div>
+        <div>
+          <label for="size">Size</label>
+          <input type="number" id="size" value="768" min="512" max="1024" step="64" />
+        </div>
+      </div>
+      <div class="hint">Identical seed + settings = identical output. 768 is the SD 1.5 sweet spot.</div>
+    </div>
+
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">7</span> <span>Refinement pipeline</span>
+        <span class="sub">Post-diffusion polish on the winner candidate</span>
+      </div>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Refine pass</div>
+          <div class="desc">img2img with same multi-ControlNet attached — preserves QR while smoothing texture into photoreal.</div>
+        </div>
+        <div class="switch on" id="refineSwitch"></div>
+      </div>
+      <div id="refineControls">
+        <div class="row" style="margin-top: 10px;">
+          <label>Refine strength</label>
+          <input type="range" id="refineStrength" min="0.10" max="0.55" step="0.01" value="0.30" />
+          <span class="val" id="refineStrengthVal">0.30</span>
+        </div>
+        <div class="hint">Lower = preserves pass-1; higher = more polish. 0.30 default works for most prompts.</div>
+        <div class="row" style="margin-top: 10px;">
           <label>Refine steps</label>
           <input type="range" id="refineSteps" min="10" max="50" step="1" value="20" />
           <span class="val" id="refineStepsVal">20</span>
         </div>
-        <div class="hint">Iterations for the img2img refine pass. Rarely needs tuning. Lower = faster, less polish; higher = slower, more detail.</div>
+      </div>
 
-        <div class="toggle-row" style="margin-top: 12px;">
-          <div>
-            <div class="label">Require scan</div>
-            <div class="desc">If off, jobs complete even when no candidate scans. Auto-escalate also requires this to be on.</div>
-          </div>
-          <div class="switch on" id="requireScanSwitch"></div>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Hi-res fix</div>
+          <div class="desc">Lanczos-upscale + low-strength img2img on the winner. Print-ready output. Adds ~30s.</div>
         </div>
+        <div class="switch" id="hiresSwitch"></div>
       </div>
-    </details>
+      <div id="hiresControls" style="display:none;">
+        <div class="row" style="margin-top: 10px;">
+          <label>Hi-res target</label>
+          <input type="range" id="hiresTarget" min="896" max="1536" step="64" value="1024" />
+          <span class="val" id="hiresTargetVal">1024</span>
+        </div>
+        <div class="row" style="margin-top: 8px;">
+          <label>Hi-res strength</label>
+          <input type="range" id="hiresStrength" min="0.10" max="0.40" step="0.01" value="0.20" />
+          <span class="val" id="hiresStrengthVal">0.20</span>
+        </div>
+        <div class="hint">Strength must stay low — high values wash out the QR pattern.</div>
+      </div>
 
-    <div class="toggle-row">
-      <div>
-        <div class="label">Fast mode</div>
-        <div class="desc">LCM-LoRA: ~3× faster, slight fidelity drop. Great for iterating.</div>
+      <div class="toggle-row">
+        <div>
+          <div class="label">ADetailer (faces)</div>
+          <div class="desc">Detect faces with Haar cascade + re-render each at 512×512. Human faces only.</div>
+        </div>
+        <div class="switch" id="adetailerSwitch"></div>
       </div>
-      <div class="switch" id="fastSwitch"></div>
-    </div>
-
-    <div class="toggle-row">
-      <div>
-        <div class="label">Auto-escalate</div>
-        <div class="desc">If 0 of N scan, retry at scale +0.1 (capped 1.5). Skips hopeless prompts.</div>
+      <div id="adetailerControls" style="display:none;">
+        <div class="row" style="margin-top: 10px;">
+          <label>Face strength</label>
+          <input type="range" id="adetailerStrength" min="0.20" max="0.55" step="0.01" value="0.35" />
+          <span class="val" id="adetailerStrengthVal">0.35</span>
+        </div>
+        <div class="hint">No-op if no face is detected. Wasted on wildlife / landscapes.</div>
       </div>
-      <div class="switch on" id="autoEscalateSwitch"></div>
-    </div>
-
-    <div class="toggle-row">
-      <div>
-        <div class="label">Refine pass</div>
-        <div class="desc">img2img polish — turns QR-textured output into a real photo</div>
-      </div>
-      <div class="switch on" id="refineSwitch"></div>
-    </div>
-
-    <div id="refineControls">
-      <div class="row" style="margin-top: 12px;">
-        <label>Refine strength</label>
-        <input type="range" id="refineStrength" min="0.10" max="0.55" step="0.01" value="0.30" />
-        <span class="val" id="refineStrengthVal">0.30</span>
-      </div>
-      <div class="hint">Lower = preserves QR & adds polish. Higher = more photoreal but QR may break.</div>
     </div>
 
-    <div class="toggle-row">
-      <div>
-        <div class="label">Hi-res fix</div>
-        <div class="desc">Upscale winner + low-strength img2img for sharper detail. Adds ~30s.</div>
+    <div class="form-group">
+      <div class="form-group-title">
+        <span class="num">8</span> <span>Run mode</span>
+        <span class="sub">Speed, retry, and scan-gating behavior</span>
       </div>
-      <div class="switch" id="hiresSwitch"></div>
-    </div>
-    <div id="hiresControls" style="display:none;">
-      <div class="row" style="margin-top: 12px;">
-        <label>Hi-res target</label>
-        <input type="range" id="hiresTarget" min="896" max="1536" step="64" value="1024" />
-        <span class="val" id="hiresTargetVal">1024</span>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Fast mode</div>
+          <div class="desc">LCM-LoRA + LCMScheduler. ~3× faster (6 steps, CFG ~1.5). Slight fidelity drop — great for iterating.</div>
+        </div>
+        <div class="switch" id="fastSwitch"></div>
       </div>
-      <div class="row" style="margin-top: 8px;">
-        <label>Hi-res strength</label>
-        <input type="range" id="hiresStrength" min="0.10" max="0.40" step="0.01" value="0.20" />
-        <span class="val" id="hiresStrengthVal">0.20</span>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Auto-escalate</div>
+          <div class="desc">If 0 of N scan AND best score ≥ 0.70, retry as a follow-up job at scale +0.10 (capped 1.50). Requires Require-scan on.</div>
+        </div>
+        <div class="switch on" id="autoEscalateSwitch"></div>
       </div>
-      <div class="hint">Strength must stay low — high values wash out the QR pattern.</div>
-    </div>
-
-    <div class="toggle-row">
-      <div>
-        <div class="label">ADetailer (faces)</div>
-        <div class="desc">Detect faces, re-render each at 512×512 for sharper features. Adds ~10s/face.</div>
+      <div class="toggle-row">
+        <div>
+          <div class="label">Require scan</div>
+          <div class="desc">Gate "completed" on at least one candidate scanning. Off = ship even if no candidate decodes.</div>
+        </div>
+        <div class="switch on" id="requireScanSwitch"></div>
       </div>
-      <div class="switch" id="adetailerSwitch"></div>
-    </div>
-    <div id="adetailerControls" style="display:none;">
-      <div class="row" style="margin-top: 12px;">
-        <label>Face strength</label>
-        <input type="range" id="adetailerStrength" min="0.20" max="0.55" step="0.01" value="0.35" />
-        <span class="val" id="adetailerStrengthVal">0.35</span>
-      </div>
-      <div class="hint">Only fires if cv2 finds a face. No-op otherwise.</div>
     </div>
 
-    <button class="primary" id="go">Generate</button>
+    <button class="primary" id="go" style="margin-top: 16px;">Generate</button>
     <button id="cancelBtn" style="width:100%;margin-top:8px;background:#1a1a20;color:var(--bad);border:1px solid #3a1f1f;padding:10px 14px;border-radius:8px;font-size:13px;cursor:pointer;display:none;">Cancel</button>
     <div class="footer-note" id="status">Idle.</div>
     <div id="progress" style="margin-top:10px;display:none;">
