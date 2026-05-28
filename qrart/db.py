@@ -80,7 +80,7 @@ class Database:
         """
         cols = (
             "id created_at status data prompt negative_prompt style model "
-            "composition candidates steps guidance controlnet_scale tile_scale control_end "
+            "composition candidates steps guidance controlnet_scale tile_scale control_start control_end "
             "refine refine_strength refine_steps size seed require_scan auto_escalate "
             "qr_monster_version qr_coverage init_image_path init_strength canny_scale fast_mode "
             "hires_fix hires_target hires_strength adetailer adetailer_strength "
@@ -92,7 +92,8 @@ class Database:
             body["data"], body["prompt"], body.get("negative_prompt"),
             body["style"], body["model"], body["composition"],
             body["candidates"], body["steps"], body["guidance"],
-            body["controlnet_scale"], body["tile_scale"], body["control_end"],
+            body["controlnet_scale"], body["tile_scale"],
+            body.get("control_start", 0.30), body["control_end"],
             int(bool(body["refine"])), body["refine_strength"], body["refine_steps"],
             body["size"], body.get("seed"), int(bool(body["require_scan"])),
             int(bool(body.get("auto_escalate", True))),

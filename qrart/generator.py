@@ -23,9 +23,15 @@ class Progress:
     so pipeline step callbacks can emit phase-aware events and check for
     cancellation. publish(type, payload) is the only side-effect — the worker
     wires it to db.insert_event so SSE subscribers can poll it out.
+
+    on_candidate_ready (optional) lets the worker save the candidate image
+    AS SOON as it's finished, so the UI can render candidates one-by-one
+    instead of waiting for the whole job. Returns a dict merged into the
+    candidate_done event payload (typically {"url": "/outputs/...", "pass1_url": ...}).
     """
     publish: Callable[[str, dict[str, Any]], None] | None = None
     is_cancelled: Callable[[], bool] | None = None
+    on_candidate_ready: Callable[[int, Any], dict[str, Any]] | None = None
     total_candidates: int = 1
     candidate_idx: int = 0
 
@@ -67,7 +73,15 @@ class GenerationRequest:
     # Tile ControlNet stacked alongside QR Monster. 0 = off; 0.3-0.5 nudges
     # toward photo coherence at the cost of slightly weakened QR signal.
     tile_scale: float = 0.0
-    control_end: float = 1.0  # full QR control through denoising for scannability
+    # Control window: ControlNet only conditions diffusion between these
+    # fractions of total steps. control_start=0.30 lets the first 30% of
+    # denoising run as pure txt2img (paints the scene from the prompt
+    # before any QR pull); control_end=0.95 releases ControlNet in the
+    # final 5% so the diffusion can finish painting cleanly. This is the
+    # QR Monster v2 community sweet spot — produces scenes that look
+    # natural with the QR woven *into* them rather than forced *over* them.
+    control_start: float = 0.30
+    control_end: float = 0.95
     refine: bool = True
     refine_strength: float = 0.30  # polishes pass-1 without erasing the QR
     refine_steps: int = 20
@@ -229,16 +243,28 @@ class Generator:
             progress.candidate_idx = i
             progress.emit("candidate_started", idx=i, seed=seed)
             cand = self._make_candidate(req, comp, seed, prompt, negative, progress)
+            candidates.append(cand)
+            # Hand the candidate to the worker for immediate persistence
+            # so the UI can render it. Failures here MUST NOT abort the
+            # job — log and continue (the worker's end-of-job save path
+            # will still cover them).
+            extra: dict[str, Any] = {}
+            if progress.on_candidate_ready is not None:
+                try:
+                    extra = progress.on_candidate_ready(i, cand) or {}
+                except Exception as e:
+                    print(f"[gen] on_candidate_ready failed for {i}: {e}", flush=True)
             progress.emit(
                 "candidate_done",
                 idx=i,
+                seed=cand.seed,
                 scans=cand.scans,
                 decoded=cand.decoded,
                 controlnet_scale=cand.controlnet_scale,
                 refine_strength=cand.refine_strength,
                 scannability=cand.scannability,
+                **extra,
             )
-            candidates.append(cand)
 
         # Best: scans first, then highest scannability score, then lowest
         # controlnet_scale (= least visible QR). Score breaks ties when
@@ -408,6 +434,8 @@ class Generator:
                 seed=seed,
                 width=comp.diffusion_size,
                 height=comp.diffusion_size,
+                control_start=req.control_start,
+                control_end=req.control_end,
                 canny_image=canny_image,
                 canny_scale=canny_scale,
                 step_callback=progress.step_cb("pass1", req.steps),
@@ -422,7 +450,7 @@ class Generator:
                 guidance=req.guidance,
                 controlnet_scale=req.controlnet_scale,
                 tile_scale=req.tile_scale,
-                control_start=0.0,
+                control_start=req.control_start,
                 control_end=req.control_end,
                 seed=seed,
                 width=comp.diffusion_size,
@@ -522,6 +550,8 @@ class Generator:
                 steps=req.refine_steps,
                 guidance=req.guidance,
                 seed=seed,
+                control_start=req.control_start,
+                control_end=req.control_end,
                 canny_image=canny_image,
                 canny_scale=canny_scale,
                 step_callback=progress.step_cb("refine", req.refine_steps),

@@ -165,7 +165,12 @@ class GenerateBody(BaseModel):
     steps: int = 32
     controlnet_scale: float = 1.10
     tile_scale: float = 0.0
-    control_end: float = 1.0
+    # Control window — when ControlNet conditions diffusion. Fractions of
+    # total denoising steps. (0.30, 0.95) is the v2 community sweet spot:
+    # txt2img paints the scene from steps 0-30%, QR Monster shapes it
+    # from 30-95%, the last 5% finishes naturally without QR pull.
+    control_start: float = 0.30
+    control_end: float = 0.95
     guidance: float = 7.5
     refine: bool = True
     refine_strength: float = 0.30
@@ -303,11 +308,46 @@ def _run_job(job: Job, cancelled: bool) -> None:
     db.mark_running(job.job_id)
     t0 = time.time()
 
+    # Set up the output dir + early QR-image save so the UI can render the
+    # source QR before any candidates land. The QR image is rebuilt
+    # identically inside Generator.generate() — building it twice is cheap.
+    job_dir = OUTPUT_DIR / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from qrart.canvas import build_composition as _build_comp
+        _comp = _build_comp(
+            job.request.data, job.request.composition,
+            job.request.qr_monster_version, job.request.qr_coverage,
+        )
+        qr_path = job_dir / "qr.png"
+        _comp.qr_image.save(qr_path)
+    except Exception as _e:
+        print(f"[worker] early QR save failed: {_e}", flush=True)
+        qr_path = None
+
+    def _save_candidate(idx: int, cand) -> dict[str, Any]:
+        """Persist a candidate's image (and pass1) the instant the
+        generator finishes it, so the UI can render incrementally.
+        Returns the URL fields that get merged into the candidate_done
+        SSE event payload."""
+        cand_path = job_dir / f"cand{idx}.png"
+        cand.image.save(cand_path)
+        url = f"/outputs/{job.job_id}/cand{idx}.png"
+        pass1_url: str | None = None
+        if cand.pass1_image is not None:
+            pass1_path = job_dir / f"cand{idx}.pass1.png"
+            cand.pass1_image.save(pass1_path)
+            pass1_url = f"/outputs/{job.job_id}/cand{idx}.pass1.png"
+        return {"url": url, "pass1_url": pass1_url}
+
     progress = Progress(
         publish=lambda type_, payload: db.insert_event(job.job_id, type_, payload),
         is_cancelled=lambda: _worker.is_cancelled(job.job_id),
+        on_candidate_ready=_save_candidate,
     )
     progress.emit("started", model=job.model)
+    if qr_path is not None:
+        progress.emit("qr_ready", url=f"/outputs/{job.job_id}/qr.png")
 
     try:
         result = get_generator(job.model).generate(job.request, progress=progress)
@@ -330,17 +370,23 @@ def _run_job(job: Job, cancelled: bool) -> None:
         return
 
     elapsed = round(time.time() - t0, 2)
-    job_dir = OUTPUT_DIR / job.job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
 
+    # Candidate image files were already written incrementally by
+    # _save_candidate during generation (via Progress.on_candidate_ready),
+    # so the loop below only persists DB rows. The hires_fix / adetailer
+    # finishing passes may have replaced result.image post-loop with a
+    # different pixel set; overwrite the winner's cand{idx}.png so disk
+    # matches what the DB will point to.
     candidate_ids: list[str] = []
     for i, c in enumerate(result.candidates):
-        path = job_dir / f"cand{i}.png"
-        c.image.save(path)
+        cand_file = job_dir / f"cand{i}.png"
+        if not cand_file.exists():
+            c.image.save(cand_file)
         pass1_url: str | None = None
         if c.pass1_image is not None:
-            pass1_path = job_dir / f"cand{i}.pass1.png"
-            c.pass1_image.save(pass1_path)
+            pass1_file = job_dir / f"cand{i}.pass1.png"
+            if not pass1_file.exists():
+                c.pass1_image.save(pass1_file)
             pass1_url = f"/outputs/{job.job_id}/cand{i}.pass1.png"
         cid = db.insert_candidate(
             job_id=job.job_id,
@@ -356,8 +402,20 @@ def _run_job(job: Job, cancelled: bool) -> None:
         )
         candidate_ids.append(cid)
 
-    qr_path = job_dir / "qr.png"
-    result.qr_image.save(qr_path)
+    # If the hires_fix / adetailer finishing pass ran, the winner
+    # candidate's .image has been replaced in-place with the post-processed
+    # version; the disk file still has the pre-hires pixels from the
+    # incremental save. Re-save to bring disk into sync.
+    best_idx_for_save = next(
+        (i for i, c in enumerate(result.candidates) if c.image is result.image), -1
+    )
+    if best_idx_for_save >= 0:
+        result.candidates[best_idx_for_save].image.save(
+            job_dir / f"cand{best_idx_for_save}.png"
+        )
+
+    if qr_path is not None and not qr_path.exists():
+        result.qr_image.save(qr_path)
 
     best_idx = next(
         (i for i, c in enumerate(result.candidates) if c.image is result.image), 0
@@ -491,7 +549,8 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         steps=steps,
         controlnet_scale=controlnet_scale,
         tile_scale=max(0.0, min(body.tile_scale, 1.0)),
-        control_end=body.control_end,
+        control_start=max(0.0, min(body.control_start, 0.9)),
+        control_end=max(0.1, min(body.control_end, 1.0)),
         guidance=guidance,
         refine=body.refine,
         refine_strength=max(0.05, min(body.refine_strength, 0.6)),
@@ -528,6 +587,8 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         "steps": req.steps,
         "controlnet_scale": req.controlnet_scale,
         "tile_scale": req.tile_scale,
+        "control_start": req.control_start,
+        "control_end": req.control_end,
         "guidance": req.guidance,
         "refine_strength": req.refine_strength,
         "refine_steps": req.refine_steps,
@@ -601,6 +662,7 @@ def rerun_job(
         steps=src["steps"],
         controlnet_scale=src["controlnet_scale"],
         tile_scale=src["tile_scale"],
+        control_start=src.get("control_start") if src.get("control_start") is not None else 0.30,
         control_end=src["control_end"],
         guidance=src["guidance"],
         refine=bool(src["refine"]),
