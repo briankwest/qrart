@@ -403,6 +403,37 @@
     font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
   }
 
+  /* Subject chips below the active-preset pill. First chip is auto-active.
+     Click switches the subject substituted into the prompt textarea.
+     Typing in the textarea deselects all chips with a "Customized" badge. */
+  .subject-row {
+    display: flex; flex-wrap: wrap; gap: 5px;
+    margin-top: 8px;
+  }
+  .subject-row .label {
+    font-size: 10px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-right: 4px; align-self: center;
+  }
+  .subject-row .chip {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); padding: 4px 10px; border-radius: 12px;
+    font-size: 11px; cursor: pointer; user-select: none;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .subject-row .chip:hover { border-color: var(--accent); }
+  .subject-row .chip.active {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    border-color: transparent; color: #fff; font-weight: 600;
+  }
+  .subject-row .chip.random { font-weight: 600; }
+  .subject-row .custom-badge {
+    background: rgba(124,92,255,0.12); color: var(--accent-2);
+    padding: 3px 8px; border-radius: 12px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+    border: 1px solid rgba(124,92,255,0.3);
+  }
+
   /* Form groups — bordered sections that visually unify related controls.
      Each section has a number, title, and a one-line subtitle so the user
      can scan the form's structure at a glance. */
@@ -512,6 +543,7 @@
         <option value="" selected>— pick a recipe to load all settings —</option>
       </select>
       <div id="presetActive" class="preset-active" style="display:none;"></div>
+      <div id="presetSubjects" class="subject-row" style="display:none;"></div>
       <div id="presetInitNotice" class="hint" style="display:none; color: var(--accent-2);">
         ⚠️ This preset needs an init image — upload one in section 2 below before generating.
       </div>
@@ -2306,11 +2338,15 @@
   }
 
   // ── Presets ──────────────────────────────────────────────────────────────
-  // 60 one-click recipes. The summary list is fetched once on load and
+  // 200 one-click recipes. The summary list is fetched once on load and
   // populates the dropdown grouped by category. When the user picks one,
   // we fetch the full preset and apply every setting + the prompt with the
-  // first example subject substituted into {SUBJECT}.
+  // first example subject substituted into {SUBJECT}. Inline chip row lets
+  // the user swap subjects without editing the textarea, including a 🎲
+  // Random chip that picks one of the preset's named subjects at random.
   let presetsSummary = [];
+  let currentPreset = null;       // full preset record from /api/presets/{slug}
+  let currentSubject = null;      // which subject is currently substituted
 
   async function loadPresets() {
     try {
@@ -2358,12 +2394,14 @@
 
       // Substitute the first example subject into {SUBJECT} (or leave the
       // prompt as-is if the template has no placeholder).
-      const subject = (p.placeholder_subjects && p.placeholder_subjects[0]) || "";
-      const filledPrompt = subject
-        ? p.prompt.replace(/\{SUBJECT\}/g, subject)
+      currentPreset = p;
+      currentSubject = (p.placeholder_subjects && p.placeholder_subjects[0]) || null;
+      const filledPrompt = currentSubject
+        ? p.prompt.replace(/\{SUBJECT\}/g, currentSubject)
         : p.prompt;
       $("prompt").value = filledPrompt;
       $("negativePrompt").value = p.negative_override || "";
+      renderSubjectChips();
 
       // Apply all settings. Mirrors the Remix restoration path; using the
       // existing setSlider / setSwitch helpers means new sliders pick up
@@ -2422,6 +2460,75 @@
       $("status").textContent = `Couldn't load preset ${slug}: ${e.message}`;
     }
   }
+
+  function renderSubjectChips() {
+    const row = $("presetSubjects");
+    if (!currentPreset
+        || !currentPreset.placeholder_subjects
+        || currentPreset.placeholder_subjects.length < 2
+        || !currentPreset.prompt.includes("{SUBJECT}")) {
+      row.style.display = "none";
+      return;
+    }
+    const chips = currentPreset.placeholder_subjects.map((s) => {
+      const active = s === currentSubject ? " active" : "";
+      return `<button type="button" class="chip${active}" data-subject="${escapeHtml(s)}">${escapeHtml(s)}</button>`;
+    }).join("");
+    // 🎲 Random chip picks any subject other than the current one.
+    const random = `<button type="button" class="chip random" data-random="1" title="Pick a random subject">🎲 Random</button>`;
+    row.innerHTML = `<span class="label">Subject:</span>${chips}${random}`;
+    row.style.display = "flex";
+    row.querySelectorAll(".chip[data-subject]").forEach((c) => {
+      c.addEventListener("click", () => switchSubject(c.dataset.subject));
+    });
+    row.querySelector(".chip[data-random]").addEventListener("click", randomSubject);
+  }
+
+  function switchSubject(subject) {
+    if (!currentPreset || !subject) return;
+    currentSubject = subject;
+    $("prompt").value = currentPreset.prompt.replace(/\{SUBJECT\}/g, subject);
+    // Re-render to flip the active class without touching the textarea
+    // (typing in the textarea would mark the row as customized below).
+    promptCustomized = false;
+    renderSubjectChips();
+  }
+
+  function randomSubject() {
+    if (!currentPreset || !currentPreset.placeholder_subjects) return;
+    const subjects = currentPreset.placeholder_subjects;
+    if (subjects.length < 2) return;
+    // Pick a non-current subject so the chip actually changes.
+    let pick = currentSubject;
+    let tries = 0;
+    while (pick === currentSubject && tries++ < 10) {
+      pick = subjects[Math.floor(Math.random() * subjects.length)];
+    }
+    switchSubject(pick);
+  }
+
+  // Manual edits in the prompt textarea deselect all chips and show a
+  // "Customized" badge so the user knows they're off the preset's rails.
+  let promptCustomized = false;
+  $("prompt").addEventListener("input", () => {
+    if (!currentPreset || !currentSubject) return;
+    const expected = currentPreset.prompt.replace(/\{SUBJECT\}/g, currentSubject);
+    if ($("prompt").value !== expected && !promptCustomized) {
+      promptCustomized = true;
+      const row = $("presetSubjects");
+      // Drop active state from all chips and append a custom badge.
+      row.querySelectorAll(".chip.active").forEach((c) => c.classList.remove("active"));
+      if (!row.querySelector(".custom-badge")) {
+        const badge = document.createElement("span");
+        badge.className = "custom-badge";
+        badge.textContent = "✎ Customized";
+        row.appendChild(badge);
+      }
+    } else if ($("prompt").value === expected && promptCustomized) {
+      promptCustomized = false;
+      renderSubjectChips();
+    }
+  });
 
   $("presetSelect").addEventListener("change", (e) => applyPreset(e.target.value));
   $("presetRandom").addEventListener("click", () => {

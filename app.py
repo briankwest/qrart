@@ -36,7 +36,7 @@ from qrart.worker import Job, MAX_QUEUED, QueueFull, Worker
 # never resolve regardless of scale (e.g. dark cosmic scenes that fight QR
 # luminance fundamentally).
 ESCALATE_STEP = 0.10
-ESCALATE_CAP = 1.50
+ESCALATE_CAP = 1.65
 ESCALATE_MIN_SCORE = 0.70
 
 ROOT = Path(__file__).parent
