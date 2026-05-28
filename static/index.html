@@ -239,13 +239,17 @@
   .history-row .history-thumb,
   .history-row .history-meta { cursor: pointer; }
   .history-row.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,92,255,0.2); }
-  .history-delete {
-    position: absolute; top: 4px; right: 6px;
-    background: transparent; border: 0; color: var(--muted);
-    font-size: 14px; line-height: 1; cursor: pointer; padding: 2px 6px;
-    border-radius: 4px;
+  /* Inline delete button — lives inside .history-actions next to Remix /
+     Run again. Distinctive destructive styling so it can't be mistaken
+     for the other actions. */
+  .history-actions .delete-btn {
+    background: transparent; border: 1px solid rgba(248,113,113,0.3);
+    color: var(--bad); font-size: 12px; line-height: 1;
+    cursor: pointer; padding: 4px 10px; border-radius: 6px;
   }
-  .history-delete:hover { background: rgba(248,113,113,0.15); color: var(--bad); }
+  .history-actions .delete-btn:hover {
+    background: rgba(248,113,113,0.15); border-color: var(--bad);
+  }
   .history-thumb {
     width: 56px; height: 56px; object-fit: cover; border-radius: 6px;
     background: var(--panel);
@@ -1069,6 +1073,11 @@
   let lastJob = null;
   let activeCand = null;
 
+  // The job id THIS browser is actively streaming via SSE. Used by the
+  // health poller to detect when another browser started a job and
+  // auto-subscribe to it.
+  let followedJobId = null;
+
   async function refreshHealth() {
     try {
       const r = await fetch("/api/health");
@@ -1082,11 +1091,31 @@
         summary += ` · queue ${j.queue_depth}/${j.max_queued}`;
       }
       $("device").textContent = `${j.device} · ${summary}`;
+
+      // Multi-browser sync: if the server reports an active job that
+      // we aren't streaming yet, auto-subscribe so this browser tracks
+      // whatever's running globally. The fresh subscriber gets the
+      // history of events from /api/jobs/{id}/stream's since= mechanism.
+      if (j.active_job_id && j.active_job_id !== followedJobId) {
+        followedJobId = j.active_job_id;
+        // Don't auto-pick up jobs we explicitly cancelled. The cancelled
+        // event handler will clear followedJobId; same for completed/failed.
+        subscribeSSE(j.active_job_id);
+        $("status").textContent =
+          `Following active job ${j.active_job_id} · started from another browser/tab`;
+        loadHistory(false);
+      }
+
       return j;
     } catch {
       $("device").textContent = "offline";
     }
   }
+
+  // Periodic health poll (5s). Anchors multi-browser sync — when one
+  // browser starts a job, every other browser picks it up on the next
+  // tick.
+  setInterval(refreshHealth, 5000);
   // Warm a model in the background. Fires on page load for the default
   // selection, and on dropdown change so picking "hyperrealism" doesn't
   // silently stall the next Generate click on a 4 GB cold download.
@@ -1363,6 +1392,9 @@
       currentES.close();
       currentES = null;
     }
+    // Allow the health poller to pick up the next active job from a
+    // different browser without thinking we're already following it.
+    followedJobId = null;
     $("cancelBtn").style.display = "none";
     setTimeout(() => { $("progress").style.display = "none"; }, 800);
   }
@@ -1370,6 +1402,7 @@
   function subscribeSSE(jobId) {
     if (currentES) currentES.close();
     candidateScanState = {};
+    followedJobId = jobId;
     const es = new EventSource(`/api/jobs/${jobId}/stream`);
     currentES = es;
 
@@ -1788,7 +1821,6 @@
         : `<span class="chip">${job.status}</span>`;
     const promptText = (job.prompt || "").slice(0, 60) + (job.prompt && job.prompt.length > 60 ? "…" : "");
     div.innerHTML = `
-      <button class="history-delete" data-act="delete" title="Delete this run">×</button>
       ${thumb}
       <div class="history-meta">
         <div class="history-prompt" title="${escapeHtml(job.prompt || "")}">${escapeHtml(promptText)}</div>
@@ -1806,6 +1838,7 @@
         <button data-act="remix" data-id="${job.id}">↻ Remix</button>
         <button data-act="run-again" data-id="${job.id}">↻ Run again</button>
         ${job.status === "failed" ? `<button data-act="show-error" data-id="${job.id}">View error</button>` : ""}
+        <button class="delete-btn" data-act="delete" data-id="${job.id}" title="Delete this run">Delete</button>
       </div>
     `;
     // Click on the thumbnail or meta area loads the run into the preview.

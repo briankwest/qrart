@@ -120,6 +120,38 @@ def _cleanup_evicted_files(evicted_ids: list[str]) -> int:
     return removed
 
 
+def _scan_orphaned_dirs() -> list[str]:
+    """Walk outputs/ and return directory names that don't correspond to a
+    job in the DB. Skips _assets/ (content-addressed, asset-bound, never a job)
+    and any non-directory entries.
+    """
+    db = get_db()
+    in_db = {
+        r["id"]
+        for r in db.conn.execute("SELECT id FROM jobs").fetchall()
+    }
+    orphans: list[str] = []
+    for entry in OUTPUT_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        name = entry.name
+        if name.startswith("_") or name.startswith("."):
+            continue  # _assets/, .DS_Store-like dirs
+        if name not in in_db:
+            orphans.append(name)
+    return orphans
+
+
+def _cleanup_orphan_dirs() -> tuple[int, int]:
+    """Find and remove outputs/{id}/ directories with no matching jobs row.
+    Returns (found, removed). Called from startup + the admin endpoint."""
+    orphans = _scan_orphaned_dirs()
+    if not orphans:
+        return (0, 0)
+    removed = _cleanup_evicted_files(orphans)
+    return (len(orphans), removed)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     # Initialize SQLite + run migrations + mark orphans before the first
@@ -131,6 +163,16 @@ def _startup() -> None:
         print(
             f"[retention] kept newest {RETENTION_KEEP} jobs, "
             f"evicted {len(evicted)} (removed {removed} output dirs)",
+            flush=True,
+        )
+    # Orphan sweep: outputs/{id}/ directories without a matching DB row.
+    # Accumulates from manual DB resets, retention pre-cleanup-implementation
+    # eviction, or any failed-mid-write path. Clean at startup so disk +
+    # DB stay in sync across restarts.
+    found, removed = _cleanup_orphan_dirs()
+    if found:
+        print(
+            f"[orphan-sweep] found {found} orphaned output dir(s), removed {removed}",
             flush=True,
         )
     _worker.start()
@@ -782,12 +824,20 @@ def stats() -> dict[str, Any]:
 
 @app.post("/api/admin/cleanup")
 def admin_cleanup(keep: int = 1000) -> dict[str, Any]:
-    """Manual retention sweep. Defaults to the same retention as startup.
-    Returns the evicted job count + how many output dirs were removed."""
+    """Manual retention sweep + orphan sweep. Defaults to the same retention
+    as startup. Returns the evicted job count + how many output dirs were
+    removed (retention) + how many orphaned output dirs were swept."""
     db = get_db()
     evicted = db.evict_old_jobs(keep=max(1, keep))
     removed = _cleanup_evicted_files(evicted)
-    return {"evicted": len(evicted), "removed_dirs": removed, "keep": keep}
+    orphans_found, orphans_removed = _cleanup_orphan_dirs()
+    return {
+        "evicted": len(evicted),
+        "removed_dirs": removed,
+        "orphans_found": orphans_found,
+        "orphans_removed": orphans_removed,
+        "keep": keep,
+    }
 
 
 @app.get("/api/jobs/{job_id}/stream")
