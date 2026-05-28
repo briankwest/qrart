@@ -87,6 +87,11 @@ class GenerationRequest:
     # auto-generated scene that the QR art is pasted into.
     init_image_path: str | None = None
     init_strength: float = 0.65
+    # Canny ControlNet scale. > 0 with an init image present stacks Canny
+    # edge conditioning into the multi-controlnet — useful for logo-shaped
+    # QR codes where modules should cluster along the logo's outlines.
+    # 0.5–0.8 typical; ≥ 1.0 starts to dominate over QR Monster.
+    canny_scale: float = 0.0
     # Fast mode: swaps in LCM-LoRA + LCMScheduler. ~3–4x faster, slight fidelity drop.
     fast_mode: bool = False
     # Hi-res fix: upscale best candidate via Lanczos and run a low-strength
@@ -140,6 +145,19 @@ def _load_init_image(url_path: str) -> Image.Image:
     else:
         fs_path = Path(url_path)
     return Image.open(fs_path).convert("RGB")
+
+
+def _canny_edges(image: Image.Image, low: int = 100, high: int = 200) -> Image.Image:
+    """Run cv2.Canny on the image and return a 3-channel RGB edge map.
+    Output is white edges on black — the Canny ControlNet's expected input
+    format. low/high thresholds tuned for typical logos / cleaned photos;
+    bump them up to drop minor edges, down to keep more detail."""
+    import cv2
+    import numpy as np
+    arr = np.array(image.convert("L"))
+    edges = cv2.Canny(arr, low, high)
+    rgb = np.stack([edges, edges, edges], axis=-1)
+    return Image.fromarray(rgb)
 
 
 def _fit_to(img: Image.Image, w: int, h: int) -> Image.Image:
@@ -355,6 +373,15 @@ class Generator:
                 progress.emit("init_image_failed", reason=str(e))
                 init_image = None
 
+        # Compute Canny edges once (qr_size resolution — pipeline resizes
+        # to width/height per call). Only when both an init image is loaded
+        # AND canny_scale > 0 so we skip the cv2 work on pure txt2img runs.
+        canny_image: Image.Image | None = None
+        canny_scale = max(0.0, float(req.canny_scale))
+        if init_image is not None and canny_scale > 0:
+            sized = _fit_to(init_image, comp.qr_size, comp.qr_size)
+            canny_image = _canny_edges(sized)
+
         # Pass-1: either txt2img + ControlNet (default), or img2img +
         # ControlNet when the user supplied an init image. For non-standalone
         # compositions the init image becomes the scene (below), NOT the QR
@@ -378,6 +405,8 @@ class Generator:
                 seed=seed,
                 width=comp.qr_size,
                 height=comp.qr_size,
+                canny_image=canny_image,
+                canny_scale=canny_scale,
                 step_callback=progress.step_cb("pass1", req.steps),
                 cancel_check=progress.cancel_check,
             )
@@ -395,6 +424,8 @@ class Generator:
                 seed=seed,
                 width=comp.qr_size,
                 height=comp.qr_size,
+                canny_image=canny_image,
+                canny_scale=canny_scale,
                 step_callback=progress.step_cb("pass1", req.steps),
                 cancel_check=progress.cancel_check,
             )
@@ -484,6 +515,8 @@ class Generator:
                 steps=req.refine_steps,
                 guidance=req.guidance,
                 seed=seed,
+                canny_image=canny_image,
+                canny_scale=canny_scale,
                 step_callback=progress.step_cb("refine", req.refine_steps),
                 cancel_check=progress.cancel_check,
             )

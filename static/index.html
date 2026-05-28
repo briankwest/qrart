@@ -382,6 +382,14 @@
     <div class="hint" id="initStrengthHint" style="display:none;">
       Higher = keep more of your image; lower = more reimagined. 0.35 is a good "hide QR in this photo" starting point.
     </div>
+    <div id="cannyScaleRow" class="row" style="display:none;margin-bottom:8px;">
+      <label for="cannyScale">Logo structure</label>
+      <input type="range" id="cannyScale" min="0.0" max="1.2" step="0.05" value="0.0" />
+      <span class="val" id="cannyScaleVal">0.0</span>
+    </div>
+    <div class="hint" id="cannyScaleHint" style="display:none;">
+      Stack a Canny edge ControlNet on your image. 0 = off. 0.5–0.8 = QR modules cluster along your logo's edges (best for logo-shaped QRs). ≥ 1.0 dominates over QR Monster.
+    </div>
 
     <label for="prompt">Prompt</label>
     <div id="promptPicker" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px;max-height:90px;overflow-y:auto;"></div>
@@ -852,6 +860,8 @@
     initZone.classList.remove("empty");
     initStrengthRow.style.display = "flex";
     initStrengthHint.style.display = "block";
+    $("cannyScaleRow").style.display = "flex";
+    $("cannyScaleHint").style.display = "block";
   }
 
   function clearInitImage() {
@@ -863,6 +873,8 @@
     initFile.value = "";
     initStrengthRow.style.display = "none";
     initStrengthHint.style.display = "none";
+    $("cannyScaleRow").style.display = "none";
+    $("cannyScaleHint").style.display = "none";
   }
 
   async function uploadInitImage(file) {
@@ -913,6 +925,9 @@
   // Slider value updates
   $("preserveInput").addEventListener("input", () => {
     $("preserveInputVal").textContent = parseFloat($("preserveInput").value).toFixed(2);
+  });
+  $("cannyScale").addEventListener("input", () => {
+    $("cannyScaleVal").textContent = parseFloat($("cannyScale").value).toFixed(2);
   });
 
   const autoEscSwitch = $("autoEscalateSwitch");
@@ -1126,6 +1141,7 @@
       // UI exposes "preserve input" (more = more original); API takes
       // init_strength (more = more diffusion change). Invert.
       init_strength: initImageUrl ? (1.0 - parseFloat($("preserveInput").value)) : 0.65,
+      canny_scale: initImageUrl ? parseFloat($("cannyScale").value) : 0.0,
       controlnet_scale: parseFloat($("scale").value),
       tile_scale: parseFloat($("tileScale").value),
       steps: parseInt($("steps").value, 10),
@@ -1565,6 +1581,11 @@
       $("preserveInputVal").textContent = preserve;
       initStrengthRow.style.display = "flex";
       initStrengthHint.style.display = "block";
+      const cs = (j.canny_scale ?? 0).toFixed(2);
+      $("cannyScale").value = cs;
+      $("cannyScaleVal").textContent = cs;
+      $("cannyScaleRow").style.display = "flex";
+      $("cannyScaleHint").style.display = "block";
     } else {
       clearInitImage();
     }

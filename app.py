@@ -189,6 +189,10 @@ class GenerateBody(BaseModel):
     # entirely (equivalent to no init). Useful band: 0.5-0.85 for "QR-ify
     # this photo", 0.25-0.45 for "barely touch it, just embed the QR."
     init_strength: float = 0.65
+    # Canny ControlNet weight for the init image's structure. 0 = ignore
+    # structure (img2img alone); 0.5-0.8 typical for logo-shaped QR codes
+    # where the modules should cluster along the logo's outlines.
+    canny_scale: float = 0.0
     fast_mode: bool = False
     hires_fix: bool = False
     hires_target: int = 1024
@@ -498,6 +502,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         ),
         init_image_path=body.init_image_path,
         init_strength=max(0.05, min(body.init_strength, 0.95)),
+        canny_scale=max(0.0, min(body.canny_scale, 1.5)),
         fast_mode=body.fast_mode,
         hires_fix=body.hires_fix,
         hires_target=max(768, min(body.hires_target, 1536)),
@@ -527,6 +532,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         "qr_monster_version": req.qr_monster_version,
         "init_image_path": req.init_image_path,
         "init_strength": req.init_strength,
+        "canny_scale": req.canny_scale,
         "client_ip": request.client.host if request.client else None,
         "user_agent": request.headers.get("user-agent"),
     }
@@ -601,6 +607,7 @@ def rerun_job(
         qr_monster_version=src.get("qr_monster_version") or QR_MONSTER_DEFAULT,
         init_image_path=src.get("init_image_path"),
         init_strength=src.get("init_strength") or 0.65,
+        canny_scale=src.get("canny_scale") or 0.0,
         fast_mode=bool(src["fast_mode"]),
         hires_fix=bool(src["hires_fix"]),
         hires_target=src["hires_target"],

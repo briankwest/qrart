@@ -67,6 +67,13 @@ def _build_scheduler(config):
 # at no significant runtime cost. Default tile_scale=0 keeps it dormant.
 CONTROLNET_TILE_ID = "lllyasviel/control_v11f1e_sd15_tile"
 
+# Canny edge ControlNet — used when the user supplies an init image and
+# wants its structure preserved (e.g. logo-shaped QR codes). Compute
+# cv2.Canny() of the init image at request time, feed as the third
+# control input. When canny_scale=0 it's effectively off; a blank image
+# is fed so the multi-controlnet still has a valid third slot.
+CONTROLNET_CANNY_ID = "lllyasviel/sd-controlnet-canny"
+
 # External VAE that produces sharper, higher-contrast outputs than the bundled one.
 VAE_ID = "stabilityai/sd-vae-ft-mse"
 
@@ -137,6 +144,22 @@ def _make_diffusers_callback(
         return callback_kwargs
 
     return adapter
+
+
+def _prep_canny_input(
+    image: Image.Image | None,
+    width: int,
+    height: int,
+) -> Image.Image:
+    """Return an (width, height) image suitable for the Canny ControlNet slot.
+
+    If `image` is None, returns a black image — combined with canny_scale=0
+    on the caller side, this is effectively a no-op slot. If `image` is
+    provided, it's assumed to already be Canny edges (computed once by the
+    generator) and just gets resized."""
+    if image is None:
+        return Image.new("RGB", (width, height), (0, 0, 0))
+    return image.convert("RGB").resize((width, height))
 
 
 def pick_device() -> tuple[str, torch.dtype]:
@@ -213,9 +236,11 @@ class QRArtPipeline:
             self._load_qr_controlnet(v)
         qr_controlnet = self._qr_controlnets[self._active_qr_version]
         tile_controlnet = ControlNetModel.from_pretrained(CONTROLNET_TILE_ID, torch_dtype=self.dtype)
-        # Multi-ControlNet: QR Monster does the heavy lifting, Tile rides along
-        # at low scale to bias toward coherent photo structure.
-        controlnets = [qr_controlnet, tile_controlnet]
+        canny_controlnet = ControlNetModel.from_pretrained(CONTROLNET_CANNY_ID, torch_dtype=self.dtype)
+        # Multi-ControlNet: three slots — QR Monster (always), Tile (photo
+        # coherence), Canny (init-image structure). Tile + Canny default to
+        # scale 0 so they're dormant unless the request opts in.
+        controlnets = [qr_controlnet, tile_controlnet, canny_controlnet]
 
         kwargs: dict = {
             "torch_dtype": self.dtype,
@@ -358,6 +383,8 @@ class QRArtPipeline:
         seed: int | None,
         width: int,
         height: int,
+        canny_image: Image.Image | None = None,
+        canny_scale: float = 0.0,
         step_callback: StepCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> Image.Image:
@@ -369,13 +396,14 @@ class QRArtPipeline:
             else None
         )
         qr = qr_image.resize((width, height))
+        canny = _prep_canny_input(canny_image, width, height)
         out = self._pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
-            image=[qr, qr],
+            image=[qr, qr, canny],
             num_inference_steps=steps,
             guidance_scale=guidance,
-            controlnet_conditioning_scale=[controlnet_scale, tile_scale],
+            controlnet_conditioning_scale=[controlnet_scale, tile_scale, canny_scale],
             control_guidance_start=control_start,
             control_guidance_end=control_end,
             generator=gen,
@@ -400,13 +428,19 @@ class QRArtPipeline:
         seed: int | None,
         width: int,
         height: int,
+        canny_image: Image.Image | None = None,
+        canny_scale: float = 0.0,
         step_callback: StepCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> Image.Image:
         """Pass-1 variant that uses a user-supplied init image instead of
         starting from noise. ControlNet img2img with the same multi-controlnet
-        (QR Monster + Tile) drives the QR pattern into the init image while
-        `strength` controls how much the original is preserved.
+        (QR Monster + Tile + optional Canny) drives the QR pattern into the
+        init image while `strength` controls how much the original is preserved.
+
+        canny_scale > 0 with a Canny-edge image stacks structural conditioning
+        — useful for logo-shaped QR codes where you want the modules to
+        cluster along the logo's edges.
 
         strength=1.0 ignores the init (equivalent to txt2img); 0.0 returns
         the init unchanged. Useful band: 0.5–0.85 for "QR-ify this photo,"
@@ -421,15 +455,16 @@ class QRArtPipeline:
         )
         init = init_image.convert("RGB").resize((width, height))
         qr = qr_image.resize((width, height))
+        canny = _prep_canny_input(canny_image, width, height)
         out = self._cn_refiner(
             prompt=prompt,
             negative_prompt=negative_prompt,
             image=init,
-            control_image=[qr, qr],
+            control_image=[qr, qr, canny],
             strength=strength,
             num_inference_steps=steps,
             guidance_scale=guidance,
-            controlnet_conditioning_scale=[controlnet_scale, tile_scale],
+            controlnet_conditioning_scale=[controlnet_scale, tile_scale, canny_scale],
             generator=gen,
             callback_on_step_end=_make_diffusers_callback(step_callback, cancel_check),
         )
@@ -483,20 +518,22 @@ class QRArtPipeline:
         steps: int,
         guidance: float,
         seed: int | None,
+        canny_image: Image.Image | None = None,
+        canny_scale: float = 0.0,
         step_callback: StepCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> Image.Image:
-        """img2img refine with the same QR+Tile multi-controlnet attached so
-        the QR pattern is preserved while the prompt polishes the photo.
+        """img2img refine with the same multi-controlnet (QR + Tile + optional
+        Canny) so the QR pattern AND any structural conditioning are preserved
+        while the prompt polishes the photo.
 
         Without ControlNet during refine, plain img2img at strength 0.30
         erodes the QR by 5-15% per pass — the prompt steers pixels back
         toward "just a photo." With ControlNet, the QR signal is re-imposed
         each step, so we can polish more aggressively without losing scan.
 
-        Caller passes the same controlnet_scale + tile_scale used in pass 1.
-        We don't reduce them here; the img2img strength parameter already
-        constrains how much can change per step.
+        Canny is propagated through refine at the same scale as pass-1 so
+        logo-shaped outputs don't have their structure smoothed away.
         """
         self.load()
         assert self._cn_refiner is not None
@@ -506,15 +543,16 @@ class QRArtPipeline:
             else None
         )
         qr = qr_image.resize(image.size)
+        canny = _prep_canny_input(canny_image, image.size[0], image.size[1])
         out = self._cn_refiner(
             prompt=prompt,
             negative_prompt=negative_prompt,
             image=image,
-            control_image=[qr, qr],
+            control_image=[qr, qr, canny],
             strength=strength,
             num_inference_steps=steps,
             guidance_scale=guidance,
-            controlnet_conditioning_scale=[controlnet_scale, tile_scale],
+            controlnet_conditioning_scale=[controlnet_scale, tile_scale, canny_scale],
             generator=gen,
             callback_on_step_end=_make_diffusers_callback(step_callback, cancel_check),
         )
