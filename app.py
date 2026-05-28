@@ -792,6 +792,26 @@ def cancel_or_delete_job(job_id: str) -> dict[str, Any]:
     return {"job_id": job_id, "deleted": True, "was": job["status"]}
 
 
+@app.get("/api/presets")
+def list_presets() -> dict[str, Any]:
+    """Lightweight listing of all 60 presets — used to populate the
+    selector dropdown. Settings are NOT included to keep this fast;
+    the UI fetches the full preset on selection."""
+    from qrart.presets import PRESETS
+    return {"presets": [p.summary() for p in PRESETS]}
+
+
+@app.get("/api/presets/{slug}")
+def get_preset(slug: str) -> dict[str, Any]:
+    """Full preset including all 33 settings + prompt template + example
+    subjects + negative override. The UI applies these to the form."""
+    from qrart.presets import PRESETS_BY_SLUG
+    p = PRESETS_BY_SLUG.get(slug)
+    if p is None:
+        raise HTTPException(404, f"no preset with slug {slug!r}")
+    return p.full()
+
+
 @app.get("/api/prompts/recent")
 def list_recent_prompts(limit: int = 20, favorites_only: bool = False) -> dict[str, Any]:
     db = get_db()

@@ -362,6 +362,47 @@
   a.action { font-size: 12px; color: var(--accent-2); text-decoration: none; border:1px solid var(--border); padding:6px 12px; border-radius:8px; }
   a.action:hover { border-color: var(--accent); }
 
+  /* Preset selector — lives at the very top of the form. Compact bar with
+     a search input, dropdown grouped by category, and an "active preset"
+     pill that shows what was loaded. */
+  .preset-bar {
+    border: 1px solid var(--accent);
+    background: linear-gradient(135deg, rgba(124,92,255,0.08), rgba(0,212,255,0.05));
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+  }
+  .preset-bar-title {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; font-weight: 700; letter-spacing: 0.4px;
+    text-transform: uppercase; color: var(--text);
+    margin-bottom: 8px;
+  }
+  .preset-bar input[type="search"] {
+    width: 100%; box-sizing: border-box;
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); padding: 7px 10px;
+    border-radius: 6px; font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .preset-bar input[type="search"]:focus { outline: 0; border-color: var(--accent); }
+  .preset-bar select { width: 100%; }
+  .preset-active {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 8px; padding: 8px 10px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 12px; color: var(--text);
+  }
+  .preset-active .icon { font-size: 20px; }
+  .preset-active .body { flex: 1; min-width: 0; }
+  .preset-active .name { font-weight: 600; }
+  .preset-active .desc { color: var(--muted); font-size: 11px; }
+  .preset-active .fit-badge {
+    background: rgba(45,212,191,0.15); color: var(--good);
+    padding: 2px 6px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.5px;
+  }
+
   /* Form groups — bordered sections that visually unify related controls.
      Each section has a number, title, and a one-line subtitle so the user
      can scan the form's structure at a glance. */
@@ -460,6 +501,21 @@
 
 <main>
   <section class="panel form-half-1" id="inputPanel">
+
+    <div id="presetBar" class="preset-bar">
+      <div class="preset-bar-title">
+        <span>🎨 Preset</span>
+        <a id="presetRandom" title="Pick a random preset" style="font-size: 11px; color: var(--accent-2); cursor: pointer;">🎲 Random</a>
+      </div>
+      <input type="search" id="presetSearch" placeholder="Search 60 presets — try 'tiger', 'van gogh', 'logo'…" autocomplete="off" />
+      <select id="presetSelect" size="1">
+        <option value="" selected>— pick a recipe to load all settings —</option>
+      </select>
+      <div id="presetActive" class="preset-active" style="display:none;"></div>
+      <div id="presetInitNotice" class="hint" style="display:none; color: var(--accent-2);">
+        ⚠️ This preset needs an init image — upload one in section 2 below before generating.
+      </div>
+    </div>
 
     <div class="form-group">
       <div class="form-group-title">
@@ -2248,6 +2304,146 @@
       box.appendChild(chip);
     }
   }
+
+  // ── Presets ──────────────────────────────────────────────────────────────
+  // 60 one-click recipes. The summary list is fetched once on load and
+  // populates the dropdown grouped by category. When the user picks one,
+  // we fetch the full preset and apply every setting + the prompt with the
+  // first example subject substituted into {SUBJECT}.
+  let presetsSummary = [];
+
+  async function loadPresets() {
+    try {
+      const r = await fetch("/api/presets");
+      const j = await r.json();
+      presetsSummary = j.presets || [];
+      renderPresetOptions(presetsSummary);
+    } catch (e) {
+      console.error("Failed to load presets", e);
+    }
+  }
+
+  function renderPresetOptions(presets) {
+    const sel = $("presetSelect");
+    // Preserve the current selection if it's still in the filtered list.
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">— pick a recipe to load all settings —</option>`;
+    // Group by category in <optgroup>s. Preserves insertion order from the
+    // server (which matches the tier ordering in qrart/presets.py).
+    const byCat = {};
+    presets.forEach((p) => {
+      if (!byCat[p.category]) byCat[p.category] = [];
+      byCat[p.category].push(p);
+    });
+    Object.entries(byCat).forEach(([cat, items]) => {
+      const og = document.createElement("optgroup");
+      og.label = cat;
+      items.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.slug;
+        opt.textContent = `${p.icon} ${p.name}` + (p.great_fit ? " ★" : "") + (p.requires_init ? " · init" : "");
+        og.appendChild(opt);
+      });
+      sel.appendChild(og);
+    });
+    if (cur && presets.some((p) => p.slug === cur)) sel.value = cur;
+  }
+
+  async function applyPreset(slug) {
+    if (!slug) return;
+    try {
+      const r = await fetch(`/api/presets/${slug}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const p = await r.json();
+
+      // Substitute the first example subject into {SUBJECT} (or leave the
+      // prompt as-is if the template has no placeholder).
+      const subject = (p.placeholder_subjects && p.placeholder_subjects[0]) || "";
+      const filledPrompt = subject
+        ? p.prompt.replace(/\{SUBJECT\}/g, subject)
+        : p.prompt;
+      $("prompt").value = filledPrompt;
+      $("negativePrompt").value = p.negative_override || "";
+
+      // Apply all settings. Mirrors the Remix restoration path; using the
+      // existing setSlider / setSwitch helpers means new sliders pick up
+      // automatically as long as their IDs match.
+      const s = p.settings || {};
+      $("model").value = s.model;
+      $("qrMonsterVersion").value = s.qr_monster_version;
+      $("composition").value = s.composition;
+      $("style").value = s.style;
+      setSlider("scale", s.controlnet_scale);
+      setSlider("qrCoverage", s.qr_coverage);
+      setSlider("tileScale", s.tile_scale);
+      setSlider("controlStart", s.control_start);
+      setSlider("controlEnd", s.control_end);
+      setSlider("steps", s.steps);
+      setSlider("candidates", s.candidates);
+      setSlider("refineStrength", s.refine_strength);
+      setSlider("refineSteps", s.refine_steps);
+      setSlider("guidance", s.guidance);
+      setSlider("hiresTarget", s.hires_target);
+      setSlider("hiresStrength", s.hires_strength);
+      setSlider("adetailerStrength", s.adetailer_strength);
+      $("size").value = s.size;
+      // init_strength is stored as diffusion-strength; UI inverts to preserve.
+      if (s.init_strength != null) setSlider("preserveInput", 1.0 - s.init_strength);
+      if (s.canny_scale != null) setSlider("cannyScale", s.canny_scale);
+
+      setSwitch("refineSwitch", !!s.refine);
+      $("refineControls").style.display = s.refine ? "block" : "none";
+      setSwitch("autoEscalateSwitch", !!s.auto_escalate);
+      setSwitch("fastSwitch", !!s.fast_mode);
+      setSwitch("hiresSwitch", !!s.hires_fix);
+      $("hiresControls").style.display = s.hires_fix ? "block" : "none";
+      setSwitch("adetailerSwitch", !!s.adetailer);
+      $("adetailerControls").style.display = s.adetailer ? "block" : "none";
+      setSwitch("requireScanSwitch", !!s.require_scan);
+
+      // Active-preset pill.
+      const fitBadge = p.great_fit ? `<span class="fit-badge">★ great QR fit</span>` : "";
+      $("presetActive").innerHTML = `
+        <span class="icon">${p.icon}</span>
+        <div class="body">
+          <div class="name">${escapeHtml(p.name)} ${fitBadge}</div>
+          <div class="desc">${escapeHtml(p.description)}</div>
+        </div>
+      `;
+      $("presetActive").style.display = "flex";
+      $("presetInitNotice").style.display = p.requires_init ? "block" : "none";
+      // If the preset needs an init image, scroll the user to the upload zone.
+      if (p.requires_init) {
+        $("initZone").scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+
+      $("status").textContent = `Loaded preset: ${p.name} · customize or click Generate`;
+    } catch (e) {
+      $("status").textContent = `Couldn't load preset ${slug}: ${e.message}`;
+    }
+  }
+
+  $("presetSelect").addEventListener("change", (e) => applyPreset(e.target.value));
+  $("presetRandom").addEventListener("click", () => {
+    if (!presetsSummary.length) return;
+    const pick = presetsSummary[Math.floor(Math.random() * presetsSummary.length)];
+    $("presetSelect").value = pick.slug;
+    applyPreset(pick.slug);
+  });
+  $("presetSearch").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderPresetOptions(presetsSummary); return; }
+    const filtered = presetsSummary.filter((p) =>
+      p.name.toLowerCase().includes(q)
+      || p.category.toLowerCase().includes(q)
+      || p.description.toLowerCase().includes(q)
+      || (p.placeholder_subjects || []).some((s) => s.toLowerCase().includes(q))
+    );
+    renderPresetOptions(filtered);
+  });
+
+  // Load presets on page boot.
+  loadPresets();
 
   // ── Stats ────────────────────────────────────────────────────────────────
   async function loadStats() {
