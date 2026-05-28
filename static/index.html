@@ -437,6 +437,10 @@
     <div id="promptPicker" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px;max-height:90px;overflow-y:auto;"></div>
     <textarea id="prompt" placeholder="describe what the image should look like">a majestic snow leopard standing on a cliff at sunrise, dramatic lighting, mountains in background</textarea>
 
+    <label for="negativePrompt">Negative prompt <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+    <textarea id="negativePrompt" placeholder="leave blank to use the style preset's default negative" style="min-height: 50px;"></textarea>
+    <div class="hint">If set, REPLACES the style preset's default negative entirely (it doesn't append). Useful when the style default is fighting your prompt — e.g. the photoreal preset's "illustration, render" negative blocks intentional stylized output.</div>
+
     <label for="model">Model</label>
     <select id="model">
       <optgroup label="Strongest photo prior (best for hidden-QR)">
@@ -553,6 +557,33 @@
         <input type="number" id="size" value="768" min="512" max="1024" step="64" />
       </div>
     </div>
+
+    <details class="settings-panel" id="advancedPanel" style="margin-top: 12px;">
+      <summary><span>Advanced</span></summary>
+      <div class="settings-body">
+        <div class="row" style="margin-top: 8px;">
+          <label>CFG (guidance)</label>
+          <input type="range" id="guidance" min="1.0" max="15.0" step="0.1" value="7.5" />
+          <span class="val" id="guidanceVal">7.5</span>
+        </div>
+        <div class="hint">How tightly the diffusion sticks to the prompt. 5–9 is the practical photoreal range; 7.5 is the SD 1.5 default. Fast mode overrides to ~1.5 server-side regardless of this value.</div>
+
+        <div class="row" style="margin-top: 12px;">
+          <label>Refine steps</label>
+          <input type="range" id="refineSteps" min="10" max="50" step="1" value="20" />
+          <span class="val" id="refineStepsVal">20</span>
+        </div>
+        <div class="hint">Iterations for the img2img refine pass. Rarely needs tuning. Lower = faster, less polish; higher = slower, more detail.</div>
+
+        <div class="toggle-row" style="margin-top: 12px;">
+          <div>
+            <div class="label">Require scan</div>
+            <div class="desc">If off, jobs complete even when no candidate scans. Auto-escalate also requires this to be on.</div>
+          </div>
+          <div class="switch on" id="requireScanSwitch"></div>
+        </div>
+      </div>
+    </details>
 
     <div class="toggle-row">
       <div>
@@ -718,6 +749,7 @@
     "scale", "qrCoverage", "tileScale", "controlStart", "controlEnd",
     "steps", "candidates", "refineStrength",
     "hiresTarget", "hiresStrength", "adetailerStrength",
+    "guidance", "refineSteps",
   ];
   ranges.forEach((id) => {
     const el = $(id), out = $(id + "Val");
@@ -1005,6 +1037,11 @@
     autoEscSwitch.classList.toggle("on");
   });
 
+  const requireScanSwitch = $("requireScanSwitch");
+  requireScanSwitch.addEventListener("click", () => {
+    requireScanSwitch.classList.toggle("on");
+  });
+
   // QR Monster v1 vs v2 have different scale sweet spots. v2 is a stronger
   // conditioner — its sweet spot is ~0.95-1.05; v1 wants ~1.10-1.20. When
   // the user toggles versions, nudge the slider toward the corresponding
@@ -1242,7 +1279,11 @@
       seed: seedVal === "" ? null : parseInt(seedVal, 10),
       refine: refine,
       refine_strength: parseFloat($("refineStrength").value),
+      refine_steps: parseInt($("refineSteps").value, 10),
       auto_escalate: autoEscSwitch.classList.contains("on"),
+      require_scan: requireScanSwitch.classList.contains("on"),
+      guidance: parseFloat($("guidance").value),
+      negative_prompt: ($("negativePrompt").value || "").trim() || null,
       fast_mode: fast,
       hires_fix: hiresSwitch.classList.contains("on"),
       hires_target: parseInt($("hiresTarget").value, 10),
@@ -1919,6 +1960,13 @@
     } else {
       clearInitImage();
     }
+
+    // Restore advanced fields too (negative_prompt, guidance, refine_steps,
+    // require_scan) so Remix produces an identical request.
+    $("negativePrompt").value = j.negative_prompt || "";
+    if (j.guidance != null) setSlider("guidance", j.guidance);
+    if (j.refine_steps != null) setSlider("refineSteps", j.refine_steps);
+    setSwitch("requireScanSwitch", j.require_scan == null ? true : !!j.require_scan);
 
     setSwitch("refineSwitch", !!j.refine);
     $("refineControls").style.display = j.refine ? "block" : "none";
