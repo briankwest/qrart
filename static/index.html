@@ -57,13 +57,21 @@
   }
 
   main {
-    max-width: 1200px; margin: 0 auto;
+    max-width: 1600px; margin: 0 auto;
     padding: 28px;
     display: grid;
-    grid-template-columns: 380px 1fr;
+    /* 3-column layout: form-half-1 | form-half-2 | stage. The form's 8
+       grouped sections split 4-4 across the two left columns so neither
+       runs much taller than the stage. */
+    grid-template-columns: 360px 360px minmax(420px, 1fr);
     gap: 22px;
   }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 1280px) {
+    main { grid-template-columns: 380px 1fr; max-width: 1100px; }
+  }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; max-width: 640px; }
+  }
 
   .panel {
     background: var(--panel);
@@ -350,7 +358,13 @@
     margin-top: 14px;
     background: rgba(28,28,34,0.4);
   }
-  .form-group:first-of-type { margin-top: 0; }
+  .panel > .form-group:first-of-type { margin-top: 0; }
+  /* On wide screens the two form panels collapse onto one column at
+     small widths; on medium widths they stack vertically within the
+     first grid cell. */
+  @media (max-width: 1280px) {
+    .panel.form-half-2 .form-group:first-of-type { margin-top: 14px; }
+  }
   .form-group-title {
     display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
     margin: 0 0 12px; font-size: 13px; font-weight: 700;
@@ -431,7 +445,7 @@
 </header>
 
 <main>
-  <section class="panel">
+  <section class="panel form-half-1" id="inputPanel">
 
     <div class="form-group">
       <div class="form-group-title">
@@ -565,6 +579,10 @@
         </defs>
       </svg>
     </div>
+
+  </section>
+
+  <section class="panel form-half-2">
 
     <div class="form-group">
       <div class="form-group-title">
