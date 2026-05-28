@@ -10,10 +10,13 @@ import asyncio
 import json as _json
 from dataclasses import replace as _replace
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from PIL import Image
+import hashlib
+import io
 
 from qrart import COMPOSITIONS, Generator, GenerationRequest, STYLE_PRESETS
 from qrart.db import get_db, new_job_id
@@ -40,6 +43,14 @@ ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 OUTPUT_DIR = ROOT / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True)
+# Content-addressed asset store for user uploads (init images, future
+# IP-Adapter references, logos). Files are named by SHA256 so the same
+# image uploaded twice deduplicates automatically. Served via the
+# existing /outputs/_assets/* static mount.
+ASSETS_DIR = OUTPUT_DIR / "_assets"
+ASSETS_DIR.mkdir(exist_ok=True)
+ASSET_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+ASSET_FORMATS = {"PNG", "JPEG", "WEBP"}
 
 app = FastAPI(title="QR Art Studio")
 
@@ -170,6 +181,14 @@ class GenerateBody(BaseModel):
     # QR Monster ControlNet version: 'v1' (default) or 'v2'. Both are loaded
     # at warm time and swapped per-request without a model reload.
     qr_monster_version: str = "v1"
+    # User-uploaded init image (URL path, e.g. /outputs/_assets/<sha>.png).
+    # When set: standalone uses it as the img2img init for pass-1;
+    # compositions use it as the scene the QR art is composited into.
+    init_image_path: str | None = None
+    # 0.0 = preserve init unchanged (no diffusion happens); 1.0 = reimagine
+    # entirely (equivalent to no init). Useful band: 0.5-0.85 for "QR-ify
+    # this photo", 0.25-0.45 for "barely touch it, just embed the QR."
+    init_strength: float = 0.65
     fast_mode: bool = False
     hires_fix: bool = False
     hires_target: int = 1024
@@ -218,6 +237,46 @@ def warm(body: WarmBody | None = None) -> dict[str, Any]:
     model = body.model if body else "photoreal"
     get_generator(model).warm()
     return {"ok": True, "elapsed_s": round(time.time() - t0, 2), "model": model}
+
+
+@app.post("/api/assets")
+async def upload_asset(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Content-addressed upload for init images / reference assets.
+
+    SHA256-hashes the bytes, stores at /outputs/_assets/{sha}.png after
+    re-encoding through PIL (normalizes color profile, strips metadata,
+    enforces a real image format). Idempotent — uploading the same file
+    twice returns the existing record without rewriting.
+    """
+    raw = await file.read()
+    if len(raw) > ASSET_MAX_BYTES:
+        raise HTTPException(413, f"asset too large (max {ASSET_MAX_BYTES // (1024 * 1024)} MB)")
+    if not raw:
+        raise HTTPException(400, "empty upload")
+    try:
+        img = Image.open(io.BytesIO(raw))
+        img.verify()  # parses header, raises on garbage
+        img = Image.open(io.BytesIO(raw))  # verify() consumes the buffer
+        fmt = (img.format or "").upper()
+    except Exception:
+        raise HTTPException(400, "unreadable image")
+    if fmt not in ASSET_FORMATS:
+        raise HTTPException(415, f"unsupported format {fmt}; use PNG/JPEG/WEBP")
+
+    sha = hashlib.sha256(raw).hexdigest()
+    path = ASSETS_DIR / f"{sha}.png"
+    url = f"/outputs/_assets/{sha}.png"
+    if not path.exists():
+        img.convert("RGB").save(path, "PNG", optimize=True)
+    width, height = img.size
+    return {
+        "hash": sha,
+        "url": url,
+        "width": width,
+        "height": height,
+        "format": "PNG",
+        "bytes": path.stat().st_size,
+    }
 
 
 def _run_job(job: Job, cancelled: bool) -> None:
@@ -437,6 +496,8 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
             body.qr_monster_version if body.qr_monster_version in QR_MONSTER_VERSIONS
             else QR_MONSTER_DEFAULT
         ),
+        init_image_path=body.init_image_path,
+        init_strength=max(0.05, min(body.init_strength, 0.95)),
         fast_mode=body.fast_mode,
         hires_fix=body.hires_fix,
         hires_target=max(768, min(body.hires_target, 1536)),
@@ -464,6 +525,8 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         "adetailer_strength": req.adetailer_strength,
         "composition": composition,
         "qr_monster_version": req.qr_monster_version,
+        "init_image_path": req.init_image_path,
+        "init_strength": req.init_strength,
         "client_ip": request.client.host if request.client else None,
         "user_agent": request.headers.get("user-agent"),
     }
@@ -536,6 +599,8 @@ def rerun_job(
         require_scan=bool(src["require_scan"]),
         auto_escalate=bool(src.get("auto_escalate", 1)),
         qr_monster_version=src.get("qr_monster_version") or QR_MONSTER_DEFAULT,
+        init_image_path=src.get("init_image_path"),
+        init_strength=src.get("init_strength") or 0.65,
         fast_mode=bool(src["fast_mode"]),
         hires_fix=bool(src["hires_fix"]),
         hires_target=src["hires_target"],

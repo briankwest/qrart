@@ -81,6 +81,12 @@ class GenerationRequest:
     # signal at the same scale, so users running v2 typically dial scale
     # down ~0.10 from their v1 settings.
     qr_monster_version: str = "v1"
+    # Init image (user upload). When set, pass-1 becomes ControlNet img2img
+    # seeded with this image at (1 - init_strength) preservation. For
+    # non-standalone compositions, the init image replaces the
+    # auto-generated scene that the QR art is pasted into.
+    init_image_path: str | None = None
+    init_strength: float = 0.65
     # Fast mode: swaps in LCM-LoRA + LCMScheduler. ~3–4x faster, slight fidelity drop.
     fast_mode: bool = False
     # Hi-res fix: upscale best candidate via Lanczos and run a low-strength
@@ -122,6 +128,36 @@ class GenerationResult:
 
 def _refine_strengths(target: float) -> list[float]:
     return [target] if target <= 0.18 else [target, max(0.15, target - 0.1)]
+
+
+def _load_init_image(url_path: str) -> Image.Image:
+    """Resolve a /outputs/* URL (or absolute filesystem path) to a PIL
+    image. Used to materialize user-uploaded init images at generation
+    time. Returns RGB."""
+    from pathlib import Path
+    if url_path.startswith("/outputs/"):
+        fs_path = Path(__file__).parent.parent / "outputs" / url_path[len("/outputs/"):]
+    else:
+        fs_path = Path(url_path)
+    return Image.open(fs_path).convert("RGB")
+
+
+def _fit_to(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Center-crop the image to the target aspect ratio, then resize to
+    exactly (w, h). Preserves the visual subject when the user's image
+    doesn't match the canvas aspect."""
+    target_ratio = w / h
+    iw, ih = img.size
+    src_ratio = iw / ih
+    if src_ratio > target_ratio:
+        new_w = int(ih * target_ratio)
+        left = (iw - new_w) // 2
+        img = img.crop((left, 0, left + new_w, ih))
+    elif src_ratio < target_ratio:
+        new_h = int(iw / target_ratio)
+        top = (ih - new_h) // 2
+        img = img.crop((0, top, iw, top + new_h))
+    return img.resize((w, h), Image.LANCZOS)
 
 
 def _score_for(image: Image.Image, data: str, comp) -> float:
@@ -308,43 +344,82 @@ class Generator:
         negative: str,
         progress: Progress,
     ) -> Candidate:
-        # Generate the QR art using the standalone path. For non-standalone
-        # compositions this runs at qr_size × qr_size — small canvas, full QR
-        # control image, matches QR Monster's training distribution exactly.
-        progress.emit("phase", phase="pass1", candidate=progress.candidate_idx)
-        qr_pass1 = self.pipeline.generate_pass1(
-            qr_image=comp.qr_image,
-            prompt=prompt,
-            negative_prompt=negative,
-            steps=req.steps,
-            guidance=req.guidance,
-            controlnet_scale=req.controlnet_scale,
-            tile_scale=req.tile_scale,
-            control_start=0.0,
-            control_end=req.control_end,
-            seed=seed,
-            width=comp.qr_size,
-            height=comp.qr_size,
-            step_callback=progress.step_cb("pass1", req.steps),
-            cancel_check=progress.cancel_check,
-        )
+        # Pre-load the user's init image once (used by both pass-1 init and
+        # the composition scene replacement below). Center-crop+resize to the
+        # respective target rectangle so it matches the diffusion canvas.
+        init_image: Image.Image | None = None
+        if req.init_image_path:
+            try:
+                init_image = _load_init_image(req.init_image_path)
+            except Exception as e:
+                progress.emit("init_image_failed", reason=str(e))
+                init_image = None
 
-        # For non-standalone, generate the scene independently. Different seed
-        # offset so the scene RNG isn't correlated with the QR art RNG.
-        scene: Image.Image | None = None
-        if not is_standalone(req.composition):
-            progress.emit("phase", phase="scene", candidate=progress.candidate_idx)
-            scene = self.pipeline.generate_scene(
+        # Pass-1: either txt2img + ControlNet (default), or img2img +
+        # ControlNet when the user supplied an init image. For non-standalone
+        # compositions the init image becomes the scene (below), NOT the QR
+        # art's init — the QR art has a dedicated qr_size×qr_size canvas
+        # where the user's image would be cropped to nothing meaningful.
+        progress.emit("phase", phase="pass1", candidate=progress.candidate_idx)
+        use_init_for_pass1 = init_image is not None and is_standalone(req.composition)
+        if use_init_for_pass1:
+            assert init_image is not None
+            init_for_pass1 = _fit_to(init_image, comp.qr_size, comp.qr_size)
+            qr_pass1 = self.pipeline.generate_pass1_from_init(
+                init_image=init_for_pass1,
+                qr_image=comp.qr_image,
                 prompt=prompt,
                 negative_prompt=negative,
                 steps=req.steps,
                 guidance=req.guidance,
-                seed=seed + 9001,
-                width=comp.canvas_w,
-                height=comp.canvas_h,
-                step_callback=progress.step_cb("scene", req.steps),
+                controlnet_scale=req.controlnet_scale,
+                tile_scale=req.tile_scale,
+                strength=req.init_strength,
+                seed=seed,
+                width=comp.qr_size,
+                height=comp.qr_size,
+                step_callback=progress.step_cb("pass1", req.steps),
                 cancel_check=progress.cancel_check,
             )
+        else:
+            qr_pass1 = self.pipeline.generate_pass1(
+                qr_image=comp.qr_image,
+                prompt=prompt,
+                negative_prompt=negative,
+                steps=req.steps,
+                guidance=req.guidance,
+                controlnet_scale=req.controlnet_scale,
+                tile_scale=req.tile_scale,
+                control_start=0.0,
+                control_end=req.control_end,
+                seed=seed,
+                width=comp.qr_size,
+                height=comp.qr_size,
+                step_callback=progress.step_cb("pass1", req.steps),
+                cancel_check=progress.cancel_check,
+            )
+
+        # Scene: either user-supplied (composition + init), or generated.
+        # Different seed offset so the scene RNG isn't correlated with the
+        # QR art RNG.
+        scene: Image.Image | None = None
+        if not is_standalone(req.composition):
+            if init_image is not None:
+                scene = _fit_to(init_image, comp.canvas_w, comp.canvas_h)
+                progress.emit("phase", phase="scene_from_init", candidate=progress.candidate_idx)
+            else:
+                progress.emit("phase", phase="scene", candidate=progress.candidate_idx)
+                scene = self.pipeline.generate_scene(
+                    prompt=prompt,
+                    negative_prompt=negative,
+                    steps=req.steps,
+                    guidance=req.guidance,
+                    seed=seed + 9001,
+                    width=comp.canvas_w,
+                    height=comp.canvas_h,
+                    step_callback=progress.step_cb("scene", req.steps),
+                    cancel_check=progress.cancel_check,
+                )
 
         def composite(qr_art: Image.Image) -> Image.Image:
             """Build the un-reinforced final image. Standalone returns the

@@ -385,6 +385,56 @@ class QRArtPipeline:
         )
         return out.images[0]
 
+    def generate_pass1_from_init(
+        self,
+        init_image: Image.Image,
+        qr_image: Image.Image,
+        prompt: str,
+        *,
+        negative_prompt: str,
+        steps: int,
+        guidance: float,
+        controlnet_scale: float,
+        tile_scale: float,
+        strength: float,
+        seed: int | None,
+        width: int,
+        height: int,
+        step_callback: StepCallback | None = None,
+        cancel_check: CancelCheck | None = None,
+    ) -> Image.Image:
+        """Pass-1 variant that uses a user-supplied init image instead of
+        starting from noise. ControlNet img2img with the same multi-controlnet
+        (QR Monster + Tile) drives the QR pattern into the init image while
+        `strength` controls how much the original is preserved.
+
+        strength=1.0 ignores the init (equivalent to txt2img); 0.0 returns
+        the init unchanged. Useful band: 0.5–0.85 for "QR-ify this photo,"
+        0.25–0.45 for "barely modify it, just embed the QR."
+        """
+        self.load()
+        assert self._cn_refiner is not None
+        gen = (
+            torch.Generator(device="cpu").manual_seed(seed)
+            if seed is not None
+            else None
+        )
+        init = init_image.convert("RGB").resize((width, height))
+        qr = qr_image.resize((width, height))
+        out = self._cn_refiner(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            image=init,
+            control_image=[qr, qr],
+            strength=strength,
+            num_inference_steps=steps,
+            guidance_scale=guidance,
+            controlnet_conditioning_scale=[controlnet_scale, tile_scale],
+            generator=gen,
+            callback_on_step_end=_make_diffusers_callback(step_callback, cancel_check),
+        )
+        return out.images[0]
+
     def generate_scene(
         self,
         prompt: str,

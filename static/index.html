@@ -250,6 +250,28 @@
     width: 56px; height: 56px; object-fit: cover; border-radius: 6px;
     background: var(--panel);
   }
+
+  /* Init image upload zone */
+  .init-zone {
+    display: flex; gap: 10px; align-items: center;
+    padding: 10px; border: 1px dashed var(--border); border-radius: 8px;
+    background: var(--panel-2); margin-bottom: 8px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .init-zone.drag { border-color: var(--accent); background: rgba(124,92,255,0.08); }
+  .init-zone.empty { cursor: pointer; }
+  .init-zone .init-preview {
+    width: 64px; height: 64px; object-fit: cover; border-radius: 6px;
+    background: var(--panel); flex-shrink: 0;
+  }
+  .init-zone .init-body { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
+  .init-zone .init-body b { color: var(--text); font-weight: 600; }
+  .init-zone .init-clear {
+    background: transparent; border: 0; color: var(--bad); cursor: pointer;
+    padding: 4px 8px; font-size: 12px;
+  }
+  .init-zone .init-clear:hover { background: rgba(248,113,113,0.15); border-radius: 4px; }
+  .init-zone input[type=file] { display: none; }
   .history-thumb.placeholder {
     display: flex; align-items: center; justify-content: center;
     font-size: 10px; color: var(--muted);
@@ -342,6 +364,24 @@
       <summary style="font-size: 11px; color: var(--muted); cursor: pointer;">Encoded payload preview</summary>
       <pre id="payloadPreview" style="margin: 6px 0 0; padding: 8px 10px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; max-height: 120px; overflow: auto;"></pre>
     </details>
+
+    <label>Init image <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+    <div id="initZone" class="init-zone empty">
+      <div class="init-preview" id="initPreview" style="display:none;"></div>
+      <div class="init-body" id="initBody">
+        <b>Drop an image</b> or click to upload. Standalone: QR is hidden in your image. Composition: your image becomes the scene.
+      </div>
+      <button type="button" class="init-clear" id="initClear" style="display:none;">✕ clear</button>
+      <input type="file" id="initFile" accept="image/png,image/jpeg,image/webp" />
+    </div>
+    <div id="initStrengthRow" class="row" style="display:none;margin-bottom:8px;">
+      <label for="preserveInput">Preserve input</label>
+      <input type="range" id="preserveInput" min="0.05" max="0.95" step="0.05" value="0.35" />
+      <span class="val" id="preserveInputVal">0.35</span>
+    </div>
+    <div class="hint" id="initStrengthHint" style="display:none;">
+      Higher = keep more of your image; lower = more reimagined. 0.35 is a good "hide QR in this photo" starting point.
+    </div>
 
     <label for="prompt">Prompt</label>
     <div id="promptPicker" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:6px;max-height:90px;overflow-y:auto;"></div>
@@ -788,6 +828,93 @@
 
   // Fast mode: when on, the steps slider auto-jumps to 6 (LCM's sweet spot)
   // and the server overrides guidance/refine_steps server-side.
+  // ── Init image upload ───────────────────────────────────────────────────
+  // Backed by /api/assets (content-addressed). The slider stores "preserve"
+  // (intuitive: more = more original) but the API takes init_strength
+  // (diffusion strength: more = more changes), so we send 1 - preserve.
+  let initImageUrl = null;
+  const initZone = $("initZone");
+  const initFile = $("initFile");
+  const initPreview = $("initPreview");
+  const initBody = $("initBody");
+  const initClear = $("initClear");
+  const initStrengthRow = $("initStrengthRow");
+  const initStrengthHint = $("initStrengthHint");
+
+  function showInitImage(url, width, height) {
+    initImageUrl = url;
+    initPreview.style.backgroundImage = `url(${url})`;
+    initPreview.style.backgroundSize = "cover";
+    initPreview.style.backgroundPosition = "center";
+    initPreview.style.display = "block";
+    initBody.innerHTML = `<b>${width}×${height}</b> · click to replace, or drag a new image`;
+    initClear.style.display = "block";
+    initZone.classList.remove("empty");
+    initStrengthRow.style.display = "flex";
+    initStrengthHint.style.display = "block";
+  }
+
+  function clearInitImage() {
+    initImageUrl = null;
+    initPreview.style.display = "none";
+    initBody.innerHTML = `<b>Drop an image</b> or click to upload. Standalone: QR is hidden in your image. Composition: your image becomes the scene.`;
+    initClear.style.display = "none";
+    initZone.classList.add("empty");
+    initFile.value = "";
+    initStrengthRow.style.display = "none";
+    initStrengthHint.style.display = "none";
+  }
+
+  async function uploadInitImage(file) {
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    initBody.innerHTML = "uploading…";
+    try {
+      const r = await fetch("/api/assets", { method: "POST", body: fd });
+      if (!r.ok) {
+        const t = await r.text();
+        initBody.innerHTML = `<b style="color:var(--bad);">upload failed:</b> ${t.slice(0, 100)}`;
+        return;
+      }
+      const j = await r.json();
+      showInitImage(j.url, j.width, j.height);
+    } catch (e) {
+      initBody.innerHTML = `<b style="color:var(--bad);">upload error:</b> ${e.message}`;
+    }
+  }
+
+  initZone.addEventListener("click", (e) => {
+    if (e.target === initClear || e.target.closest(".init-clear")) return;
+    initFile.click();
+  });
+  initFile.addEventListener("change", (e) => uploadInitImage(e.target.files[0]));
+  initClear.addEventListener("click", (e) => {
+    e.stopPropagation();
+    clearInitImage();
+  });
+  ["dragenter", "dragover"].forEach((ev) =>
+    initZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      initZone.classList.add("drag");
+    })
+  );
+  ["dragleave", "drop"].forEach((ev) =>
+    initZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      initZone.classList.remove("drag");
+    })
+  );
+  initZone.addEventListener("drop", (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (file) uploadInitImage(file);
+  });
+
+  // Slider value updates
+  $("preserveInput").addEventListener("input", () => {
+    $("preserveInputVal").textContent = parseFloat($("preserveInput").value).toFixed(2);
+  });
+
   const autoEscSwitch = $("autoEscalateSwitch");
   autoEscSwitch.addEventListener("click", () => {
     autoEscSwitch.classList.toggle("on");
@@ -927,7 +1054,10 @@
     }
   }
 
+  let currentCandidate = null;
+
   function renderMeta(c) {
+    currentCandidate = c;
     const refineChip = c.refine_strength != null
       ? `<span class="chip">refine ${c.refine_strength}</span>`
       : `<span class="chip">no refine</span>`;
@@ -942,7 +1072,29 @@
       <span class="chip">seed ${c.seed}</span>
       <span class="chip">scale ${c.controlnet_scale}</span>
       ${refineChip}
+      <button class="chip" id="useAsInit" title="Use this candidate as the init image for the next generation" style="cursor:pointer;border:0;">↻ use as init</button>
     `;
+    $("useAsInit").addEventListener("click", () => useCandidateAsInit(c));
+  }
+
+  function useCandidateAsInit(c) {
+    if (!c || !c.url) return;
+    // Candidate images live under /outputs/{id}/cand{i}.png; our generator's
+    // _load_init_image handles any /outputs/* URL, so no re-upload needed.
+    initImageUrl = c.url;
+    initPreview.style.backgroundImage = `url(${c.url})`;
+    initPreview.style.backgroundSize = "cover";
+    initPreview.style.backgroundPosition = "center";
+    initPreview.style.display = "block";
+    initBody.innerHTML = `<b>chained from previous candidate</b> · click to replace`;
+    initClear.style.display = "block";
+    initZone.classList.remove("empty");
+    $("preserveInput").value = 0.45;
+    $("preserveInputVal").textContent = "0.45";
+    initStrengthRow.style.display = "flex";
+    initStrengthHint.style.display = "block";
+    initZone.scrollIntoView({ behavior: "smooth", block: "center" });
+    $("status").textContent = "Chained — current candidate is now the init for next generation";
   }
 
   $("go").addEventListener("click", async () => {
@@ -970,6 +1122,10 @@
       model: $("model").value,
       qr_monster_version: $("qrMonsterVersion").value,
       composition: $("composition").value,
+      init_image_path: initImageUrl,
+      // UI exposes "preserve input" (more = more original); API takes
+      // init_strength (more = more diffusion change). Invert.
+      init_strength: initImageUrl ? (1.0 - parseFloat($("preserveInput").value)) : 0.65,
       controlnet_scale: parseFloat($("scale").value),
       tile_scale: parseFloat($("tileScale").value),
       steps: parseInt($("steps").value, 10),
@@ -1262,6 +1418,7 @@
           ${job.elapsed_s ? `<span class="chip">${job.elapsed_s}s</span>` : ""}
           <span class="chip" title="${job.created_at}">${relTime(job.created_at)}</span>
           ${job.parent_job_id ? `<span class="chip run">remix</span>` : ""}
+          ${job.init_image_path ? `<span class="chip" title="Used an init image: ${job.init_image_path}">init</span>` : ""}
         </div>
       </div>
       <div class="history-actions">
@@ -1391,6 +1548,26 @@
     $("size").value = j.size;
     $("seed").value = j.seed != null ? j.seed : "";
     if (j.qr_monster_version) $("qrMonsterVersion").value = j.qr_monster_version;
+    if (j.init_image_path) {
+      // Restore the init image from the prior job — file is content-addressed
+      // so we just need the URL. Strength stored on the job is diffusion
+      // strength; UI shows the inverse (preserve input).
+      initImageUrl = j.init_image_path;
+      initPreview.style.backgroundImage = `url(${j.init_image_path})`;
+      initPreview.style.backgroundSize = "cover";
+      initPreview.style.backgroundPosition = "center";
+      initPreview.style.display = "block";
+      initBody.innerHTML = `<b>from job ${j.id}</b> · click to replace`;
+      initClear.style.display = "block";
+      initZone.classList.remove("empty");
+      const preserve = (1.0 - (j.init_strength ?? 0.65)).toFixed(2);
+      $("preserveInput").value = preserve;
+      $("preserveInputVal").textContent = preserve;
+      initStrengthRow.style.display = "flex";
+      initStrengthHint.style.display = "block";
+    } else {
+      clearInitImage();
+    }
 
     setSwitch("refineSwitch", !!j.refine);
     $("refineControls").style.display = j.refine ? "block" : "none";
