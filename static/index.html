@@ -336,6 +336,48 @@
   a.action { font-size: 12px; color: var(--accent-2); text-decoration: none; border:1px solid var(--border); padding:6px 12px; border-radius:8px; }
   a.action:hover { border-color: var(--accent); }
 
+  /* Settings-used panel */
+  .settings-panel {
+    margin-top: 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel-2); padding: 0;
+  }
+  .settings-panel > summary {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 14px; cursor: pointer; user-select: none;
+    list-style: none; font-size: 13px; font-weight: 600; color: var(--text);
+  }
+  .settings-panel > summary::-webkit-details-marker { display: none; }
+  .settings-panel > summary::before {
+    content: "▸"; color: var(--muted); margin-right: 6px;
+    transition: transform 0.12s;
+  }
+  .settings-panel[open] > summary::before { transform: rotate(90deg); }
+  .settings-panel > summary button {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--accent-2); padding: 4px 10px; border-radius: 6px;
+    font-size: 11px; cursor: pointer;
+  }
+  .settings-panel > summary button:hover { border-color: var(--accent); }
+  .settings-body {
+    padding: 0 14px 14px;
+  }
+  .settings-group { margin-top: 12px; }
+  .settings-group h4 {
+    margin: 0 0 6px; padding: 0; font-size: 11px; font-weight: 700;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .settings-rows {
+    display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+  }
+  .settings-rows .k { color: var(--muted); }
+  .settings-rows .v { color: var(--text); word-break: break-word; }
+  .settings-rows .v.muted { color: var(--muted); font-style: italic; }
+  .settings-rows .v img {
+    max-width: 56px; max-height: 56px; vertical-align: middle;
+    border-radius: 4px; border: 1px solid var(--border);
+  }
+
 </style>
 </head>
 <body>
@@ -612,6 +654,14 @@
           <a id="download" class="action" download="qrart.png" style="display:none;">Download</a>
         </div>
       </div>
+
+      <details id="settingsPanel" class="settings-panel" style="display:none;">
+        <summary>
+          <span>Settings used</span>
+          <button type="button" id="copySettings" class="action" title="Copy as JSON">copy JSON</button>
+        </summary>
+        <div id="settingsBody"></div>
+      </details>
     </div>
 
     <div class="panel" id="comparePanel" style="display:none;">
@@ -1154,6 +1204,8 @@
     const qrPrev = $("qrPreview");
     if (qrPrev) qrPrev.innerHTML = `<div class="placeholder" style="font-size:11px;">QR rendering…</div>`;
     $("meta").innerHTML = "";
+    // Clear the settings panel so stale settings don't show during the run.
+    $("settingsPanel").style.display = "none";
     $("comparePanel").style.display = "none";
     $("comparelink").style.display = "none";
     $("status").textContent = "Working — first run downloads ~6GB of weights.";
@@ -1450,19 +1502,182 @@
     renderGallery(cands, Math.max(0, bestIndex));
     if (cands.length) showCandidate(cands[bestIndex >= 0 ? bestIndex : 0]);
     // Status line varies by status so cancelled/failed jobs don't lie
-    // about being "Done".
+    // about being "Done". Phase 4: include "X of N scanned" so the per-job
+    // breakdown is visible without expanding the gallery thumbs.
+    const scannedCount = cands.filter((c) => c.scans).length;
+    const scanFrag = cands.length ? ` · ${scannedCount}/${cands.length} scanned` : "";
     let statusLine;
     if (j.status === "completed") {
-      statusLine = `Done in ${j.elapsed_s}s · ${j.scans ? "decoded" : "did not decode"}`;
+      statusLine = `Done in ${j.elapsed_s}s · ${j.scans ? "decoded" : "did not decode"}${scanFrag}`;
     } else if (j.status === "cancelled") {
-      statusLine = `Cancelled · ${cands.length} candidate(s) saved before cancel`;
+      statusLine = `Cancelled · ${cands.length} candidate(s) saved before cancel${scanFrag}`;
     } else if (j.status === "failed") {
-      statusLine = `Failed · ${cands.length} candidate(s) saved before error`;
+      statusLine = `Failed · ${cands.length} candidate(s) saved before error${scanFrag}`;
     } else {
-      statusLine = `${j.status} · ${cands.length} candidate(s)`;
+      statusLine = `${j.status} · ${cands.length} candidate(s)${scanFrag}`;
     }
     $("status").textContent = `${statusLine} · job ${j.id}`;
+    renderSettingsPanel(j);
   }
+
+  // ── Settings panel ───────────────────────────────────────────────────────
+  // Renders every persisted setting for a loaded job in grouped key/value
+  // rows. Data comes straight off the /api/jobs/{id} response — there's no
+  // separate API. Default collapsed; Copy-as-JSON button copies the
+  // request body.
+  function renderSettingsPanel(j) {
+    if (!j) {
+      $("settingsPanel").style.display = "none";
+      return;
+    }
+    const panel = $("settingsPanel");
+    panel.style.display = "block";
+
+    const fmt = (v) => {
+      if (v === null || v === undefined || v === "") return null;
+      if (typeof v === "number") return Number.isInteger(v) ? String(v) : v.toFixed(2);
+      if (typeof v === "boolean") return v ? "on" : "off";
+      return String(v);
+    };
+    const link = (path) => path
+      ? `<a href="${escapeHtml(path)}" target="_blank" style="color:var(--accent-2);text-decoration:none;">${escapeHtml(path)}</a>`
+      : null;
+
+    const created = relTime(j.created_at);
+    const createdAbs = j.created_at || "";
+    const elapsed = j.elapsed_s != null ? `${j.elapsed_s}s` : null;
+    const cands = j.candidate_list || [];
+    const scannedCount = cands.filter((c) => c.scans).length;
+    const bestCand = cands.find((c) => c.id === j.best_candidate_id) || cands[0];
+
+    const groups = [
+      {
+        title: "Identity",
+        rows: [
+          ["job id", `<code>${escapeHtml(j.id)}</code>`],
+          ["status", fmt(j.status)],
+          ["created", `${created} <span class="muted">(${escapeHtml(createdAbs)})</span>`],
+          ["elapsed", elapsed],
+          ["parent", j.parent_job_id ? `<code>${escapeHtml(j.parent_job_id)}</code> <span class="muted">(remix)</span>` : null],
+        ],
+      },
+      {
+        title: "Payload + prompt",
+        rows: [
+          ["encodes", `<code>${escapeHtml(j.data || "")}</code>`],
+          ["prompt", j.prompt ? `<div style="white-space:pre-wrap;">${escapeHtml(j.prompt)}</div>` : null],
+          ["negative override", j.negative_prompt ? `<div style="white-space:pre-wrap;">${escapeHtml(j.negative_prompt)}</div>` : `<span class="muted">(style default)</span>`],
+          ["style preset", fmt(j.style)],
+        ],
+      },
+      {
+        title: "Model + ControlNet",
+        rows: [
+          ["model", fmt(j.model)],
+          ["QR Monster", fmt(j.qr_monster_version)],
+          ["composition", fmt(j.composition)],
+          ["QR coverage", fmt(j.qr_coverage)],
+          ["QR strength", fmt(j.controlnet_scale)],
+          ["tile pull", fmt(j.tile_scale)],
+          ["control window", j.control_start != null ? `${fmt(j.control_start)} → ${fmt(j.control_end)}` : fmt(j.control_end)],
+        ],
+      },
+      {
+        title: "Diffusion",
+        rows: [
+          ["steps", fmt(j.steps)],
+          ["guidance", fmt(j.guidance)],
+          ["candidates", fmt(j.candidates)],
+          ["seed", j.seed != null ? fmt(j.seed) : `<span class="muted">(random)</span>`],
+          ["size", fmt(j.size)],
+          ["fast mode", fmt(j.fast_mode)],
+          ["auto-escalate", fmt(j.auto_escalate)],
+          ["require scan", fmt(j.require_scan)],
+        ],
+      },
+      {
+        title: "Refine + finishing",
+        rows: [
+          ["refine pass", fmt(j.refine)],
+          ["refine strength", j.refine ? fmt(j.refine_strength) : null],
+          ["refine steps", j.refine ? fmt(j.refine_steps) : null],
+          ["hi-res fix", fmt(j.hires_fix)],
+          ["hi-res target", j.hires_fix ? `${fmt(j.hires_target)} px` : null],
+          ["hi-res strength", j.hires_fix ? fmt(j.hires_strength) : null],
+          ["ADetailer", fmt(j.adetailer)],
+          ["face strength", j.adetailer ? fmt(j.adetailer_strength) : null],
+        ],
+      },
+      {
+        title: "Init image",
+        rows: [
+          ["init image", j.init_image_path
+            ? `<img src="${escapeHtml(j.init_image_path)}" alt="init" />`
+            : `<span class="muted">(none)</span>`],
+          ["preserve input", j.init_image_path ? fmt(1 - (j.init_strength ?? 0.65)) : null],
+          ["logo structure", j.init_image_path ? fmt(j.canny_scale) : null],
+        ],
+      },
+      {
+        title: "Outcome",
+        rows: [
+          ["candidates saved", `${cands.length} · ${scannedCount} scanned · ${cands.length - scannedCount} missed`],
+          ["best candidate", bestCand ? `idx ${bestCand.idx} · seed ${bestCand.seed} · score ${(bestCand.scannability ?? 0).toFixed(2)}` : null],
+          ["decoded", j.decoded ? `<code>${escapeHtml(j.decoded)}</code>` : `<span class="muted">(did not decode)</span>`],
+          ["qr.png", link(j.qr_image_path)],
+        ],
+      },
+    ];
+
+    const html = `<div class="settings-body">` + groups.map((g) => {
+      const rows = g.rows
+        .filter(([_, v]) => v !== null && v !== undefined)
+        .map(([k, v]) => `<div class="k">${escapeHtml(k)}</div><div class="v">${v}</div>`)
+        .join("");
+      if (!rows) return "";
+      return `<div class="settings-group">
+        <h4>${escapeHtml(g.title)}</h4>
+        <div class="settings-rows">${rows}</div>
+      </div>`;
+    }).join("") + `</div>`;
+    $("settingsBody").innerHTML = html;
+    // Store the full job on the panel so the copy button can grab it
+    // without re-fetching.
+    panel.dataset.jobJson = JSON.stringify(j);
+  }
+
+  // Copy as JSON — only the input fields (not the candidate list / state)
+  $("copySettings")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const raw = $("settingsPanel").dataset.jobJson;
+    if (!raw) return;
+    const j = JSON.parse(raw);
+    // Strip output / bookkeeping fields — leave only what could be POSTed
+    // back to /api/generate.
+    const inputs = {
+      data: j.data, prompt: j.prompt, style: j.style, model: j.model,
+      negative_prompt: j.negative_prompt, candidates: j.candidates, steps: j.steps,
+      controlnet_scale: j.controlnet_scale, tile_scale: j.tile_scale,
+      control_start: j.control_start, control_end: j.control_end,
+      guidance: j.guidance, refine: !!j.refine, refine_strength: j.refine_strength,
+      refine_steps: j.refine_steps, size: j.size, composition: j.composition,
+      seed: j.seed, require_scan: !!j.require_scan, auto_escalate: !!j.auto_escalate,
+      qr_monster_version: j.qr_monster_version, qr_coverage: j.qr_coverage,
+      init_image_path: j.init_image_path, init_strength: j.init_strength,
+      canny_scale: j.canny_scale, fast_mode: !!j.fast_mode,
+      hires_fix: !!j.hires_fix, hires_target: j.hires_target,
+      hires_strength: j.hires_strength, adetailer: !!j.adetailer,
+      adetailer_strength: j.adetailer_strength,
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(inputs, null, 2));
+      $("copySettings").textContent = "copied!";
+      setTimeout(() => { $("copySettings").textContent = "copy JSON"; }, 1200);
+    } catch {
+      $("copySettings").textContent = "copy failed";
+    }
+  });
 
   // ── History panel ────────────────────────────────────────────────────────
   // Fetches /api/jobs with the current filters and renders rows. Each row
@@ -1472,7 +1687,16 @@
   let historyOffset = 0;
 
   function relTime(iso) {
-    const t = new Date(iso + (iso.endsWith("Z") ? "" : "Z")).getTime();
+    if (!iso) return "—";
+    // Server stores timestamps as ISO 8601 with explicit timezone offset
+    // (e.g. "2026-05-28T19:04:49+00:00"). Old code only checked for a
+    // trailing "Z" and was appending "Z" to strings that already had
+    // "+00:00", producing "...+00:00Z" → Invalid Date. Detect Z OR
+    // ±HH:MM(:SS) offsets and only fall back to "treat as UTC" when
+    // there's no timezone suffix at all.
+    const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(iso);
+    const t = new Date(hasTz ? iso : iso + "Z").getTime();
+    if (Number.isNaN(t)) return "—";
     const dt = (Date.now() - t) / 1000;
     if (dt < 60) return `${Math.round(dt)}s ago`;
     if (dt < 3600) return `${Math.round(dt / 60)}m ago`;
@@ -1833,10 +2057,12 @@
       const s = await r.json();
       const total = s.total || 0;
       const completed = s.completed || 0;
-      const scanRate = s.scan_rate != null ? `${(s.scan_rate * 100).toFixed(0)}%` : "–";
+      const scanned = s.scanned || 0;
+      const notScanned = s.not_scanned || 0;
+      const rate = s.scan_rate != null ? ` (${(s.scan_rate * 100).toFixed(0)}%)` : "";
       const avg = s.avg_elapsed_completed != null ? `${s.avg_elapsed_completed}s` : "–";
       $("historyStats").textContent =
-        `${total} total · ${completed} done · ${scanRate} scan · avg ${avg}`;
+        `${total} total · ${completed} done · ${scanned} scanned · ${notScanned} missed${rate} · avg ${avg}`;
     } catch {
       $("historyStats").textContent = "";
     }

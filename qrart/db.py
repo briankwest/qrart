@@ -353,8 +353,11 @@ class Database:
                 " ORDER BY used_count DESC LIMIT 5"
             ).fetchall()
         ]
+        not_scanned = max(0, completed - scanned)
         return {
             **totals,
+            "scanned": scanned,
+            "not_scanned": not_scanned,
             "scan_rate": scan_rate,
             "avg_elapsed_completed": (
                 round(totals["avg_elapsed_completed"], 1)
