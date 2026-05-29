@@ -38,7 +38,7 @@ from qrart.presets import PRESETS, PRESETS_BY_SLUG  # noqa: E402
 
 
 # ── Tuning knobs (mirror what the server enforces) ────────────────────────────
-ESCALATE_CAP = 1.65          # matches app.ESCALATE_CAP
+ESCALATE_CAP = 1.90          # matches app.ESCALATE_CAP
 SCORE_FLOOR = 0.55           # below this on attempt 1 → hopeless prompt
 SCALE_BUMP = 0.05            # per failed attempt
 COVERAGE_BUMP_AT_ATTEMPT = 3

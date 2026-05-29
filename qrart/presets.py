@@ -96,21 +96,23 @@ PHOTOREAL = {
     "style": "photoreal",
     "model": "photoreal",
     "qr_monster_version": "v1",
-    "controlnet_scale": 1.15,
+    "controlnet_scale": 1.44,
     "qr_coverage": 0.75,
     "steps": 38,
     "refine": True,
     "refine_strength": 0.30,
 }
 
-# Artist-style — the recipe for tier 2. Scale bumped 1.20 → 1.25 to match
-# the community v2 sweet spot.
+# Artist-style — the recipe for tier 2. Scale bumped 1.20 → 1.25 → 1.56
+# (current value reflects the 25% across-the-board bump for higher scan
+# rates; community sweet spot was 1.25 but our preset scan rate was too
+# inconsistent at that level).
 ARTIST = {
     **_BASE,
     "style": "illustration",
     "model": "dreamshaper",
     "qr_monster_version": "v2",
-    "controlnet_scale": 1.25,
+    "controlnet_scale": 1.56,
     "qr_coverage": 0.72,
     "steps": 40,
     "refine": False,
@@ -197,7 +199,7 @@ TIER1: list[Preset] = [
         description="Northern lights + warm-lit cabin",
         prompt="{SUBJECT} under vivid green and purple aurora borealis swirling across the night sky, deep snow blanketing the foreground, dense pine forest, frost-covered branches, dramatic long-exposure Lapland night photography, atmospheric shimmer",
         placeholder_subjects=["wooden alpine cabin glowing warm yellow", "reindeer in foreground", "a lone wanderer with lantern", "a frozen lake with reflections"],
-        settings=_p(PHOTOREAL, controlnet_scale=1.18, qr_coverage=0.78),
+        settings=_p(PHOTOREAL, controlnet_scale=1.48, qr_coverage=0.78),
     ),
     Preset(
         slug="bird-in-flight",
@@ -259,7 +261,7 @@ TIER1: list[Preset] = [
         description="Neon-lit rain-soaked dystopian street",
         prompt="{SUBJECT}, dense rain-soaked neon-lit cyberpunk megacity, holographic billboards reflecting in puddles, steam from street vendors, motorcycle chrome reflections, flying car silhouettes, atmospheric fog, Blade Runner 2049 cinematic, electric cyan and magenta palette",
         placeholder_subjects=["futuristic Tokyo alley at midnight", "Hong Kong Kowloon walled city", "neon-drenched dystopian downtown", "cyberpunk bazaar street"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, tile_scale=0.40),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, tile_scale=0.40),
     ),
 
     # 🍽️ Lifestyle & Culture (5)
@@ -344,7 +346,7 @@ TIER1: list[Preset] = [
         description="Nostalgic telecom + warm amber light",
         prompt="{SUBJECT}, vintage telecom equipment, polished chrome and signal-blue palette, warm amber backlight, dramatic shadow detail, hyperdetailed nostalgic product photography, 1980s industrial design, anamorphic lens flares, retro analog aesthetic",
         placeholder_subjects=["vintage BellSouth payphone booth", "retro rotary telephone", "rotary dial pulse phone", "Touch-Tone keypad close-up", "vintage telephone switchboard"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, qr_coverage=0.78),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, qr_coverage=0.78),
     ),
     Preset(
         slug="modern-tech-circuits",
@@ -354,7 +356,7 @@ TIER1: list[Preset] = [
         description="Fiber optic + LEDs + neural patterns",
         prompt="{SUBJECT}, glowing cyan fiber optic cables, server racks with cascading LED indicators, holographic data flow visualizations, electric blue and signal cyan palette, atmospheric volumetric lighting, hyperdetailed cyberpunk technology photography",
         placeholder_subjects=["data center server room corridor", "fiber optic network hub", "neural network visualization sphere", "futuristic AI computing core", "telecom signal tower at night"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, qr_coverage=0.78, tile_scale=0.40),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, qr_coverage=0.78, tile_scale=0.40),
     ),
 
     # 🎨 Stylized / Artistic (5) — bridge from photoreal to artist tier
@@ -377,7 +379,7 @@ TIER1: list[Preset] = [
         description="Gooey-style neon spires + ringed planets",
         prompt="{SUBJECT}, futuristic fantasy neon-lit landscape with dense cluster of ornate Indian temple domes and stupas stretching to the horizon, ringed planets and pastel moons in a vivid cosmic sky, rhythmic repeating bulbous dome shapes, hot amber lanterns burning from stone lattice towers, ultra detailed Midjourney-style atmospheric concept art",
         placeholder_subjects=["holy city of cosmos floating in space", "ringed-planet temple cluster", "neon-lit pagoda metropolis", "stupa-domed celestial city"],
-        settings=_p(ARTIST, controlnet_scale=1.30),
+        settings=_p(ARTIST, controlnet_scale=1.63),
         great_fit=True,
     ),
     Preset(
@@ -388,7 +390,7 @@ TIER1: list[Preset] = [
         description="Vivid geometric cathedral glass",
         prompt="{SUBJECT}, intricate cathedral stained glass window, vivid jewel-tone colors, lead came outlines, sunlight refracting through each pane, dramatic chiaroscuro, ultra detailed gothic architectural illustration",
         placeholder_subjects=["a soaring angel", "rose window pattern", "scene of saints", "abstract geometric pattern"],
-        settings=_p(ARTIST, controlnet_scale=1.30, qr_coverage=0.75),
+        settings=_p(ARTIST, controlnet_scale=1.63, qr_coverage=0.75),
     ),
     Preset(
         slug="watercolor-painterly",
@@ -398,7 +400,7 @@ TIER1: list[Preset] = [
         description="Soft flowing watercolor",
         prompt="{SUBJECT}, traditional watercolor painting, soft flowing washes of color bleeding into each other, paper texture visible, loose brushstrokes, atmospheric lighting, refined botanical illustration",
         placeholder_subjects=["botanical study of flowers", "misty mountain landscape", "old European village", "field of poppies"],
-        settings=_p(ARTIST, model="openjourney", controlnet_scale=1.15, qr_coverage=0.75),
+        settings=_p(ARTIST, model="openjourney", controlnet_scale=1.44, qr_coverage=0.75),
     ),
     Preset(
         slug="neon-synthwave",
@@ -440,7 +442,7 @@ TIER1: list[Preset] = [
         description="Your logo's structure heavily preserved",
         prompt="{SUBJECT}, sharp brand identity composition, intricate background texture, hyperdetailed product photography",
         placeholder_subjects=["logo on industrial backdrop", "logo with cinematic lighting"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, canny_scale=0.80, init_strength=0.15),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, canny_scale=0.80, init_strength=0.15),
         requires_init=True,
     ),
 ]
@@ -545,7 +547,7 @@ TIER2: list[Preset] = [
         prompt="{SUBJECT} reimagined in the style of Piet Mondrian, geometric grid composition, bold black lines dividing rectangular fields of pure primary red yellow blue and white, neoplasticism, hard-edged abstraction",
         placeholder_subjects=["a city skyline grid", "Broadway Boogie Woogie composition", "a stained glass window", "a hard-edged abstract pattern"],
         negative_override="photograph, photorealistic, gradient, soft, organic, curved, watermark",
-        settings=_p(ARTIST, controlnet_scale=1.30, qr_coverage=0.85),
+        settings=_p(ARTIST, controlnet_scale=1.63, qr_coverage=0.85),
         great_fit=True,
     ),
     Preset(
@@ -579,7 +581,7 @@ TIER2: list[Preset] = [
         prompt="{SUBJECT} interpreted as action drip painting in the style of Jackson Pollock, dense layered splatters of black and white and ochre and cobalt, all-over composition, expressive abstract expressionism, rhythmic chaos",
         placeholder_subjects=["a chaotic dance of color", "Autumn Rhythm interpretation", "convergence of energetic drips"],
         negative_override="photograph, photorealistic, representational, recognizable, vector, watermark",
-        settings=_p(ARTIST, controlnet_scale=1.35, qr_coverage=0.75),
+        settings=_p(ARTIST, controlnet_scale=1.69, qr_coverage=0.75),
     ),
     Preset(
         slug="rothko",
@@ -591,7 +593,7 @@ TIER2: list[Preset] = [
         placeholder_subjects=["fields of orange and red", "deep blue and crimson harmony", "stacked sage and ochre"],
         negative_override="photograph, photorealistic, hard edges, geometric, representational, watermark",
         # Rothko needs a much higher scale to push QR through flat color blocks
-        settings=_p(ARTIST, controlnet_scale=1.40, qr_coverage=0.85, control_start=0.15),
+        settings=_p(ARTIST, controlnet_scale=1.75, qr_coverage=0.85, control_start=0.15),
     ),
 
     # 🌀 Surrealist (4)
@@ -1326,7 +1328,7 @@ TIER4: list[Preset] = [
         description="Bridge + holographic displays",
         prompt="{SUBJECT}, dramatic futuristic spaceship interior, holographic displays and control panels, cool blue and warm orange palette, atmospheric haze, hyperdetailed sci-fi concept art",
         placeholder_subjects=["a starship bridge command deck", "a derelict cargo bay", "an alien ship interior", "a luxury starliner lounge"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, qr_coverage=0.78)),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, qr_coverage=0.78)),
     Preset(slug="astronaut-alien-world", name="Astronaut on alien world", category="🚀 Sci-fi & space", icon="🧑‍🚀",
         description="Spacesuit + otherworldly landscape",
         prompt="{SUBJECT}, dramatic astronaut on alien world, weathered spacesuit detail, otherworldly landscape with strange rock formations, dramatic alien sky, hyperdetailed sci-fi photography",
@@ -1346,12 +1348,12 @@ TIER4: list[Preset] = [
         description="Mechanical android + dramatic light",
         prompt="{SUBJECT}, dramatic AI android close-up, intricate mechanical detail, glowing eyes and chest core, dramatic studio lighting, hyperdetailed sci-fi photography",
         placeholder_subjects=["a humanoid android contemplating", "a battle-damaged combat robot", "a sleek service AI", "a vintage retro-future robot"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18)),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48)),
     Preset(slug="metaverse-vr", name="Hologram / metaverse VR", category="🚀 Sci-fi & space", icon="🕶️",
         description="Holographic UI + cyberpunk overlay",
         prompt="{SUBJECT}, dramatic holographic metaverse scene, glowing translucent interfaces, neon data streams, cyan and magenta palette, atmospheric depth, hyperdetailed sci-fi concept art",
         placeholder_subjects=["a hacker in VR with holographic UI", "a glowing data city in cyberspace", "an avatar in a virtual world", "a metaverse marketplace"],
-        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.18, qr_coverage=0.78, tile_scale=0.40)),
+        settings=_p(PHOTOREAL, model="cyberrealistic", controlnet_scale=1.48, qr_coverage=0.78, tile_scale=0.40)),
 
     # 🐉 Fantasy creatures (6)
     Preset(slug="dragon-western", name="Dragon (Western)", category="🐉 Fantasy creatures", icon="🐉",
