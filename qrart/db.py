@@ -48,6 +48,10 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        # Wait up to 30s for the write lock instead of the 5s default. Avoids
+        # OperationalError("database is locked") when the server starts while
+        # a long-running script (calibration / backfill) holds the writer.
+        self.conn.execute("PRAGMA busy_timeout = 30000")
         self._write_lock = threading.RLock()
         self._apply_migrations()
 
@@ -82,7 +86,7 @@ class Database:
             "id created_at status data prompt negative_prompt style model "
             "composition candidates steps guidance controlnet_scale tile_scale control_start control_end "
             "refine refine_strength refine_steps size seed require_scan auto_escalate "
-            "qr_monster_version qr_coverage init_image_path init_strength canny_scale fast_mode "
+            "qr_monster_version qr_coverage init_image_path init_strength canny_scale prefer_scannable fast_mode "
             "hires_fix hires_target hires_strength adetailer adetailer_strength "
             "client_ip user_agent parent_job_id"
         ).split()
@@ -102,6 +106,7 @@ class Database:
             body.get("init_image_path"),
             body.get("init_strength", 0.65),
             body.get("canny_scale", 0.0),
+            int(bool(body.get("prefer_scannable", True))),
             int(bool(body["fast_mode"])),
             int(bool(body["hires_fix"])), body["hires_target"], body["hires_strength"],
             int(bool(body["adetailer"])), body["adetailer_strength"],

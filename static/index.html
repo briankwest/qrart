@@ -861,6 +861,13 @@
       </div>
       <div class="toggle-row">
         <div>
+          <div class="label">Prefer scannable</div>
+          <div class="desc">Bump QR strength +0.10, add 2 candidates, force Auto-escalate + Require scan ON. Biases for "your phone reads it." Uncheck for aesthetic-first generation.</div>
+        </div>
+        <div class="switch on" id="preferScannableSwitch"></div>
+      </div>
+      <div class="toggle-row">
+        <div>
           <div class="label">Fast mode</div>
           <div class="desc">LCM-LoRA + LCMScheduler. ~3× faster (6 steps, CFG ~1.5). Slight fidelity drop — great for iterating.</div>
         </div>
@@ -869,14 +876,14 @@
       <div class="toggle-row">
         <div>
           <div class="label">Auto-escalate</div>
-          <div class="desc">If 0 of N scan AND best score ≥ 0.70, retry as a follow-up job at scale +0.10 (capped 1.50). Requires Require-scan on.</div>
+          <div class="desc">If 0 of N scan on a phone-class scanner AND best score ≥ 0.70, retry as a follow-up job at scale +0.10 (capped 1.65). Forced ON when Prefer scannable is on.</div>
         </div>
         <div class="switch on" id="autoEscalateSwitch"></div>
       </div>
       <div class="toggle-row">
         <div>
           <div class="label">Require scan</div>
-          <div class="desc">Gate "completed" on at least one candidate scanning. Off = ship even if no candidate decodes.</div>
+          <div class="desc">Gate "completed" on at least one candidate decoding on cv2/zxing. Off = ship even if only qreader can read. Forced ON when Prefer scannable is on.</div>
         </div>
         <div class="switch on" id="requireScanSwitch"></div>
       </div>
@@ -1270,6 +1277,18 @@
     requireScanSwitch.classList.toggle("on");
   });
 
+  const preferScannableSwitch = $("preferScannableSwitch");
+  preferScannableSwitch.addEventListener("click", () => {
+    preferScannableSwitch.classList.toggle("on");
+    // When Prefer scannable goes ON, auto-flip the two safety nets so the
+    // user sees what's being forced. When it goes OFF, leave the safety
+    // nets where they were so the user can dial them independently.
+    if (preferScannableSwitch.classList.contains("on")) {
+      autoEscSwitch.classList.add("on");
+      requireScanSwitch.classList.add("on");
+    }
+  });
+
   // QR Monster v1 vs v2 have different scale sweet spots. v2 is a stronger
   // conditioner — its sweet spot is ~0.95-1.05; v1 wants ~1.10-1.20. When
   // the user toggles versions, nudge the slider toward the corresponding
@@ -1530,8 +1549,19 @@
     const compatChip = tier
       ? `<span class="chip ${tier.cls}" title="${tier.desc}\n${compatTooltip(c)}">${tier.label}</span>`
       : "";
+    // Phone-class success: cv2 OR zxing. qreader-only is shown as a
+    // distinct "pro only" amber chip so the user knows their phone
+    // probably won't decode it.
+    const phoneScans = !!(c.scans_cv2 || c.scans_zxing);
+    const qreaderOnly = !phoneScans && !!c.scans_qreader;
+    const scanLabel = phoneScans
+      ? "✓ scans"
+      : qreaderOnly
+        ? "⚠ pro scanner only"
+        : "✗ does not scan";
+    const scanCls = phoneScans ? "good" : (qreaderOnly ? "" : "bad");
     $("meta").innerHTML = `
-      <span class="chip ${c.scans ? "good" : "bad"}">${c.scans ? "✓ scans" : "✗ does not scan"}</span>
+      <span class="chip ${scanCls}" title="${phoneScans ? 'Phone-readable on cv2/zxing' : qreaderOnly ? 'Decoded only by YOLO+libzbar — phones may not read' : 'No scanner decoded this'}">${scanLabel}</span>
       ${compatChip}
       ${scoreChip}
       <span class="chip">seed ${c.seed}</span>
@@ -1630,6 +1660,7 @@
       refine_steps: parseInt($("refineSteps").value, 10),
       auto_escalate: autoEscSwitch.classList.contains("on"),
       require_scan: requireScanSwitch.classList.contains("on"),
+      prefer_scannable: preferScannableSwitch.classList.contains("on"),
       guidance: parseFloat($("guidance").value),
       negative_prompt: ($("negativePrompt").value || "").trim() || null,
       fast_mode: fast,
@@ -1902,13 +1933,20 @@
     renderGallery(cands, Math.max(0, bestIndex));
     if (cands.length) showCandidate(cands[bestIndex >= 0 ? bestIndex : 0]);
     // Status line varies by status so cancelled/failed jobs don't lie
-    // about being "Done". Phase 4: include "X of N scanned" so the per-job
-    // breakdown is visible without expanding the gallery thumbs.
+    // about being "Done". Phone-class success surfaces "pro only" when
+    // the winner only decodes on qreader (YOLO+libzbar) — that's the
+    // failure mode where the UI used to misleadingly say "✓ scans".
     const scannedCount = cands.filter((c) => c.scans).length;
-    const scanFrag = cands.length ? ` · ${scannedCount}/${cands.length} scanned` : "";
+    const phoneCount = cands.filter((c) => c.scans_cv2 || c.scans_zxing).length;
+    const scanFrag = cands.length ? ` · ${phoneCount}/${cands.length} phone-readable` : "";
+    const proOnlyWinner = j.scans && phoneCount === 0;
     let statusLine;
     if (j.status === "completed") {
-      statusLine = `Done in ${j.elapsed_s}s · ${j.scans ? "decoded" : "did not decode"}${scanFrag}`;
+      if (proOnlyWinner) {
+        statusLine = `Done in ${j.elapsed_s}s · ⚠ pro-scanner only · phones won't read — try Prefer scannable or higher QR strength${scanFrag}`;
+      } else {
+        statusLine = `Done in ${j.elapsed_s}s · ${phoneCount > 0 ? "phone-readable" : (j.scans ? "decoded (pro only)" : "did not decode")}${scanFrag}`;
+      }
     } else if (j.status === "cancelled") {
       statusLine = `Cancelled · ${cands.length} candidate(s) saved before cancel${scanFrag}`;
     } else if (j.status === "failed") {
@@ -2330,6 +2368,7 @@
     setSwitch("refineSwitch", !!j.refine);
     $("refineControls").style.display = j.refine ? "block" : "none";
     setSwitch("autoEscalateSwitch", j.auto_escalate == null ? true : !!j.auto_escalate);
+    setSwitch("preferScannableSwitch", j.prefer_scannable == null ? true : !!j.prefer_scannable);
     setSwitch("fastSwitch", !!j.fast_mode);
     setSwitch("hiresSwitch", !!j.hires_fix);
     $("hiresControls").style.display = j.hires_fix ? "block" : "none";
@@ -2552,6 +2591,7 @@
       setSwitch("refineSwitch", !!s.refine);
       $("refineControls").style.display = s.refine ? "block" : "none";
       setSwitch("autoEscalateSwitch", !!s.auto_escalate);
+      // Presets don't set prefer_scannable; keep the user's existing toggle.
       setSwitch("fastSwitch", !!s.fast_mode);
       setSwitch("hiresSwitch", !!s.hires_fix);
       $("hiresControls").style.display = s.hires_fix ? "block" : "none";

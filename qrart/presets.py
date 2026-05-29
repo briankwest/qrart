@@ -71,7 +71,10 @@ _BASE = {
     "control_start": 0.25,
     "control_end": 0.95,
     "tile_scale": 0.30,
-    "candidates": 5,
+    # Bumped 5 → 6 to bias toward phone-readable outputs without much
+    # compute hit. Best-of-6 is statistically meaningful improvement over
+    # best-of-5 when the per-candidate scan rate is in the 40–70% band.
+    "candidates": 6,
     "refine_steps": 20,
     "size": 768,
     "composition": "standalone",
@@ -100,7 +103,10 @@ PHOTOREAL = {
     "qr_coverage": 0.75,
     "steps": 38,
     "refine": True,
-    "refine_strength": 0.30,
+    # Dialed 0.30 → 0.25 so refine preserves more of pass-1's QR pattern.
+    # The ControlNet-aware refine still re-imposes the QR each step, but
+    # less img2img denoise = less high-frequency module detail erosion.
+    "refine_strength": 0.25,
 }
 
 # Artist-style — the recipe for tier 2. Scale dialed BACK from 1.56 to

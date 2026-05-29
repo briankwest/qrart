@@ -209,7 +209,7 @@ class GenerateBody(BaseModel):
     style: str = "photoreal"
     model: str = "photoreal"
     negative_prompt: str | None = None
-    candidates: int = 5
+    candidates: int = 6
     steps: int = 32
     controlnet_scale: float = 1.10
     tile_scale: float = 0.0
@@ -221,7 +221,7 @@ class GenerateBody(BaseModel):
     control_end: float = 0.95
     guidance: float = 7.5
     refine: bool = True
-    refine_strength: float = 0.30
+    refine_strength: float = 0.25
     refine_steps: int = 20
     size: int = 768
     composition: str = "standalone"
@@ -231,6 +231,11 @@ class GenerateBody(BaseModel):
     # scale +0.1 (capped at 1.5) until one passes or we hit the cap. Off → user
     # gets the failed result and can manually retry.
     auto_escalate: bool = True
+    # Prefer scannable: when ON, server bumps controlnet_scale +0.10 and
+    # candidates +2, AND forces auto_escalate + require_scan ON. Default
+    # ON to bias toward "the output scans on your phone." Uncheck for
+    # aesthetic-first generation where the user accepts lower scan rate.
+    prefer_scannable: bool = True
     # QR Monster ControlNet version: 'v1' (default) or 'v2'. Both are loaded
     # at warm time and swapped per-request without a model reload.
     qr_monster_version: str = "v1"
@@ -533,17 +538,26 @@ def _run_job(job: Job, cancelled: bool) -> None:
 
 
 def _maybe_escalate(job: Job, result, db) -> None:
-    """A2: when require_scan + auto_escalate are on and zero candidates scanned
-    but the best score is salvageable, enqueue a follow-up at scale +0.1.
+    """A2: when require_scan + auto_escalate are on and no candidate is
+    PHONE-READABLE (cv2 or zxing decoded) but the best score is salvageable,
+    enqueue a follow-up at scale +0.1.
 
-    The best-score floor avoids burning compute on hopeless prompts where
-    QR will never resolve at any scale (cosmic galaxies, plain skies, etc.).
+    Treats qreader-only successes as "did not scan" — outputs that only the
+    YOLO+libzbar fallback can read won't scan on users' phones, which is the
+    bar that matters. The best-score floor avoids burning compute on
+    hopeless prompts where QR will never resolve at any scale.
     """
     if not job.body.get("require_scan"):
         return
     if not job.body.get("auto_escalate", True):
         return
-    if result.scans:
+    # Phone-readable check: any candidate where cv2 OR zxing decoded the QR.
+    # This is stricter than result.scans (rolled-up "any scanner decoded").
+    any_phone_readable = any(
+        getattr(c, "scans_cv2", False) or getattr(c, "scans_zxing", False)
+        for c in result.candidates
+    )
+    if any_phone_readable:
         return
     # Don't escalate cancelled-mid-run results (the worker would have raised
     # CancelledByUser, so we wouldn't reach here — but defensive).
@@ -619,6 +633,18 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         guidance = body.guidance
         controlnet_scale = body.controlnet_scale
 
+    # "Prefer scannable" bias: bump scale + candidates and force the safety
+    # nets ON. The user can uncheck the toggle to disable this and get
+    # aesthetic-first generation.
+    effective_candidates = max(1, min(body.candidates, 8))
+    effective_auto_escalate = body.auto_escalate
+    effective_require_scan = body.require_scan
+    if body.prefer_scannable:
+        controlnet_scale = min(controlnet_scale + 0.10, 1.95)
+        effective_candidates = min(effective_candidates + 2, 8)
+        effective_auto_escalate = True
+        effective_require_scan = True
+
     print(
         f"[generate] model={body.model} prompt={body.prompt[:60]!r}... "
         f"scale={body.controlnet_scale} tile={body.tile_scale} "
@@ -636,7 +662,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         prompt=body.prompt,
         style=body.style,
         negative_prompt=body.negative_prompt,
-        candidates=max(1, min(body.candidates, 8)),
+        candidates=effective_candidates,
         steps=steps,
         controlnet_scale=controlnet_scale,
         tile_scale=max(0.0, min(body.tile_scale, 1.0)),
@@ -649,8 +675,8 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         size=body.size,
         composition=composition,
         seed=body.seed,
-        require_scan=body.require_scan,
-        auto_escalate=body.auto_escalate,
+        require_scan=effective_require_scan,
+        auto_escalate=effective_auto_escalate,
         qr_monster_version=(
             body.qr_monster_version if body.qr_monster_version in QR_MONSTER_VERSIONS
             else QR_MONSTER_DEFAULT
@@ -692,6 +718,7 @@ def generate(body: GenerateBody, request: Request) -> dict[str, Any]:
         "init_image_path": req.init_image_path,
         "init_strength": req.init_strength,
         "canny_scale": req.canny_scale,
+        "prefer_scannable": body.prefer_scannable,
         "client_ip": request.client.host if request.client else None,
         "user_agent": request.headers.get("user-agent"),
     }
@@ -764,6 +791,7 @@ def rerun_job(
         seed=src["seed"] if keep_seed else None,
         require_scan=bool(src["require_scan"]),
         auto_escalate=bool(src.get("auto_escalate", 1)),
+        prefer_scannable=bool(src.get("prefer_scannable", 1)),
         qr_monster_version=src.get("qr_monster_version") or QR_MONSTER_DEFAULT,
         qr_coverage=src.get("qr_coverage") or 1.0,
         init_image_path=src.get("init_image_path"),

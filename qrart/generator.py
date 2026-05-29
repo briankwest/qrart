@@ -163,6 +163,15 @@ def _refine_strengths(target: float) -> list[float]:
     return [target] if target <= 0.18 else [target, max(0.15, target - 0.1)]
 
 
+def phone_scans(c) -> bool:
+    """A candidate is "phone-readable" if either cv2 OR zxing decoded it.
+    qreader-only successes are tolerable but don't count as phone-class —
+    stock iOS Camera and most Android scanners use zxing-class decoders, so
+    a candidate that only YOLO+libzbar reads will fail in users' hands.
+    """
+    return bool(getattr(c, "scans_cv2", False)) or bool(getattr(c, "scans_zxing", False))
+
+
 def _load_init_image(url_path: str) -> Image.Image:
     """Resolve a /outputs/* URL (or absolute filesystem path) to a PIL
     image. Used to materialize user-uploaded init images at generation
@@ -277,13 +286,18 @@ class Generator:
                 **extra,
             )
 
-        # Best: scans first, then highest scannability score, then lowest
-        # controlnet_scale (= least visible QR). Score breaks ties when
-        # multiple candidates scan, and when none scan it picks the closest
-        # one — which the C1 rescue pass nudges over the threshold.
+        # Best-candidate sort, prioritized:
+        #   1. phone_scans (cv2 OR zxing) — what stock phones can actually read
+        #   2. any-scanner scans (covers qreader-only fallbacks)
+        #   3. scannability score (closer to scannable = better near-miss)
+        #   4. lowest controlnet_scale (= least visible QR)
+        # A qreader-only candidate now loses to any phone-readable one
+        # regardless of score, fixing the "looks like it scans but doesn't"
+        # bug where outputs were tagged ✓ but consumer scanners couldn't read.
         best = sorted(
             candidates,
             key=lambda c: (
+                0 if phone_scans(c) else 1,
                 0 if c.scans else 1,
                 -c.scannability,
                 c.controlnet_scale,
@@ -291,11 +305,12 @@ class Generator:
         )[0]
         best_idx = candidates.index(best)
 
-        # C1: cheap in-generation rescue. If no candidate scanned but the
-        # best is close (score ≥ 0.70), do ONE more generation at scale
-        # +0.10 with the best seed +1. Cheaper than A2's full re-run, and
-        # often enough to push a borderline candidate over.
-        if not best.scans and best.scannability >= 0.70 and req.controlnet_scale < 1.5:
+        # C1: cheap in-generation rescue. Fires when the best candidate
+        # isn't PHONE-READABLE (cv2/zxing), even if qreader decoded it —
+        # otherwise the user gets an output that looks scannable but their
+        # iPhone Camera can't read. score >= 0.70 means there's something
+        # to nudge over the line; below that, no scale bump will help.
+        if not phone_scans(best) and best.scannability >= 0.70 and req.controlnet_scale < 1.5:
             rescue_scale = round(req.controlnet_scale + 0.10, 2)
             progress.emit(
                 "rescue_started",
@@ -334,10 +349,12 @@ class Generator:
                 scans=rescue.scans,
                 score=round(rescue.scannability, 3),
             )
-            # Re-pick best including the rescue candidate.
+            # Re-pick best including the rescue candidate. Same phone-first
+            # priority as the initial sort.
             best = sorted(
                 candidates,
                 key=lambda c: (
+                    0 if phone_scans(c) else 1,
                     0 if c.scans else 1,
                     -c.scannability,
                     c.controlnet_scale,
