@@ -362,6 +362,32 @@
   a.action { font-size: 12px; color: var(--accent-2); text-decoration: none; border:1px solid var(--border); padding:6px 12px; border-radius:8px; }
   a.action:hover { border-color: var(--accent); }
 
+  /* Inline queue strip — shows above the preview when jobs are waiting.
+     Surfaces queue_depth + queued_ids from /api/health so multi-browser
+     queue state is visible without digging into history. */
+  .queue-strip {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 12px; margin-bottom: 12px;
+    background: rgba(124,92,255,0.06);
+    border: 1px solid rgba(124,92,255,0.25);
+    border-radius: 8px;
+    font-size: 12px; color: var(--text);
+  }
+  .queue-strip .queue-label {
+    font-weight: 600; color: var(--accent-2);
+    text-transform: uppercase; letter-spacing: 0.4px; font-size: 11px;
+  }
+  .queue-strip .queue-chip {
+    border: 1px solid var(--border); background: var(--panel-2);
+    padding: 3px 8px; border-radius: 10px;
+    font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    color: var(--muted);
+  }
+  .queue-strip .queue-chip.mine {
+    background: linear-gradient(135deg, rgba(124,92,255,0.18), rgba(0,212,255,0.12));
+    border-color: var(--accent); color: var(--text); font-weight: 600;
+  }
+
   /* Preset selector — lives at the very top of the form. Compact bar with
      a search input, dropdown grouped by category, and an "active preset"
      pill that shows what was loaded. */
@@ -538,7 +564,7 @@
         <span>🎨 Preset</span>
         <a id="presetRandom" title="Pick a random preset" style="font-size: 11px; color: var(--accent-2); cursor: pointer;">🎲 Random</a>
       </div>
-      <input type="search" id="presetSearch" placeholder="Search 60 presets — try 'tiger', 'van gogh', 'logo'…" autocomplete="off" />
+      <input type="search" id="presetSearch" placeholder="Search 250 presets — try 'tiger', 'van gogh', 'mandala', 'logo'…" autocomplete="off" />
       <select id="presetSelect" size="1">
         <option value="" selected>— pick a recipe to load all settings —</option>
       </select>
@@ -871,6 +897,7 @@
   </section>
 
   <section class="stage">
+    <div id="queueStrip" class="queue-strip" style="display:none;"></div>
     <div class="panel">
       <h2>Preview</h2>
       <div class="preview" id="preview">
@@ -1275,6 +1302,10 @@
   // auto-subscribe to it.
   let followedJobId = null;
 
+  // Tracks job IDs we explicitly originated from THIS browser via Generate,
+  // so we can distinguish "your job" from "watching another browser's job".
+  const myJobIds = new Set();
+
   async function refreshHealth() {
     try {
       const r = await fetch("/api/health");
@@ -1289,23 +1320,83 @@
       }
       $("device").textContent = `${j.device} · ${summary}`;
 
-      // Multi-browser sync: if the server reports an active job that
-      // we aren't streaming yet, auto-subscribe so this browser tracks
-      // whatever's running globally. The fresh subscriber gets the
-      // history of events from /api/jobs/{id}/stream's since= mechanism.
+      // Render the inline queue strip if any jobs are waiting.
+      renderQueueStrip(j);
+
+      // Multi-browser sync: if the server reports an active job that we
+      // aren't streaming yet, seed our state from /api/jobs/{id} first
+      // (so candidates that already completed before this browser came
+      // online show up in the live gallery) and then subscribe to the
+      // SSE stream for forward events. Bug A + C fix.
       if (j.active_job_id && j.active_job_id !== followedJobId) {
-        followedJobId = j.active_job_id;
-        // Don't auto-pick up jobs we explicitly cancelled. The cancelled
-        // event handler will clear followedJobId; same for completed/failed.
-        subscribeSSE(j.active_job_id);
-        $("status").textContent =
-          `Following active job ${j.active_job_id} · started from another browser/tab`;
-        loadHistory(false);
+        await loadAndFollowJob(j.active_job_id);
       }
 
       return j;
     } catch {
       $("device").textContent = "offline";
+    }
+  }
+
+  function renderQueueStrip(health) {
+    const strip = $("queueStrip");
+    if (!strip) return;
+    const queued = (health && health.queued_ids) || [];
+    const depth = (health && health.queue_depth) || 0;
+    if (depth <= 0) {
+      strip.style.display = "none";
+      return;
+    }
+    strip.style.display = "flex";
+    const chips = queued.map((id, i) => {
+      const mine = myJobIds.has(id) ? " mine" : "";
+      const pos = i + 1;
+      const tag = myJobIds.has(id) ? `★ yours · #${pos}` : `#${pos}`;
+      return `<span class="queue-chip${mine}" title="${escapeHtml(id)}">${tag}</span>`;
+    }).join("");
+    strip.innerHTML =
+      `<span class="queue-label">⏳ Queue · ${depth}/${health.max_queued}:</span>${chips}`;
+  }
+
+  async function loadAndFollowJob(jobId) {
+    // Seed state from the DB before subscribing — fixes the reload-loses-
+    // state bug (SSE only sends FUTURE events, so without this seed any
+    // candidates that finished before we attached are invisible).
+    followedJobId = jobId;
+    try {
+      const r = await fetch(`/api/jobs/${jobId}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      // Terminal status — just render the final state and skip the SSE.
+      if (["completed", "failed", "cancelled"].includes(j.status)) {
+        renderJob(j);
+        return;
+      }
+      // In-flight: hydrate liveCandidates with whatever's already saved,
+      // then subscribe for new events.
+      liveCandidates = (j.candidate_list || []).map((c) => ({
+        id: c.id, index: c.idx, url: c.image_path,
+        pass1_url: c.pass1_image_path || undefined,
+        seed: c.seed, scans: !!c.scans, decoded: c.decoded,
+        controlnet_scale: c.controlnet_scale,
+        refine_strength: c.refine_strength,
+        scannability: c.scannability,
+        scans_cv2: c.scans_cv2, scans_zxing: c.scans_zxing,
+        scans_qreader: c.scans_qreader,
+      }));
+      if (j.qr_image_path) setQrPreview(j.qr_image_path);
+      if (liveCandidates.length) {
+        renderGallery(liveCandidates, 0);
+        showCandidate(liveCandidates[liveCandidates.length - 1]);
+      }
+      const mine = myJobIds.has(jobId);
+      $("status").textContent = mine
+        ? `Reconnected to your job ${jobId} (${liveCandidates.length} candidate(s) so far)`
+        : `Watching active job ${jobId} from another browser/tab — your form unchanged. Click Generate to queue your own.`;
+      subscribeSSE(jobId);
+    } catch (e) {
+      $("status").textContent = `Couldn't load job ${jobId}: ${e.message}`;
+      followedJobId = null;
     }
   }
 
@@ -1572,6 +1663,7 @@
       }
       const ack = await r.json();
       currentJobId = ack.job_id;
+      myJobIds.add(ack.job_id);  // mark as originated here so the queue strip shows "★ yours"
       $("status").textContent = `Queued · position ${ack.queue_position} · job ${ack.job_id}`;
       $("cancelBtn").style.display = "block";
       $("progress").style.display = "block";

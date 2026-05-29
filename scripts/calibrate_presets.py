@@ -38,7 +38,7 @@ from qrart.presets import PRESETS, PRESETS_BY_SLUG  # noqa: E402
 
 
 # ── Tuning knobs (mirror what the server enforces) ────────────────────────────
-ESCALATE_CAP = 1.90          # matches app.ESCALATE_CAP
+ESCALATE_CAP = 1.65          # matches app.ESCALATE_CAP
 SCORE_FLOOR = 0.55           # below this on attempt 1 → hopeless prompt
 SCALE_BUMP = 0.05            # per failed attempt
 COVERAGE_BUMP_AT_ATTEMPT = 3
@@ -128,6 +128,17 @@ def best_scannability(job: dict[str, Any]) -> float:
     )
 
 
+def any_candidate_phone_readable(job: dict[str, Any]) -> bool:
+    """Success criterion for calibration: at least one candidate must scan
+    on a consumer-grade scanner (cv2 or zxing), NOT just qreader's YOLO
+    fallback. This is the iOS-class-or-better bar — what stock phone cameras
+    can actually read."""
+    for c in job.get("candidate_list", []):
+        if c.get("scans_cv2") or c.get("scans_zxing"):
+            return True
+    return False
+
+
 # ── Calibration loop ──────────────────────────────────────────────────────────
 def build_request_body(preset, settings: dict[str, Any], data: str) -> dict[str, Any]:
     subject = (
@@ -183,7 +194,10 @@ def calibrate_one(
         last_score = best_scannability(job)
         elapsed = round(time.time() - start, 1)
 
-        if job.get("scans"):
+        # Tightened criterion: phone-class scanner must decode, not just
+        # qreader. Pass-through `job.scans` is the rolled-up "any decoder
+        # succeeded" which is too generous for real-world use.
+        if any_candidate_phone_readable(job):
             return {
                 "status": "success",
                 "attempts": attempt,

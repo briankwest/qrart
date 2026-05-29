@@ -8,6 +8,7 @@ from typing import Any
 
 import asyncio
 import json as _json
+from contextlib import asynccontextmanager
 from dataclasses import replace as _replace
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -36,7 +37,7 @@ from qrart.worker import Job, MAX_QUEUED, QueueFull, Worker
 # never resolve regardless of scale (e.g. dark cosmic scenes that fight QR
 # luminance fundamentally).
 ESCALATE_STEP = 0.10
-ESCALATE_CAP = 1.90
+ESCALATE_CAP = 1.65
 ESCALATE_MIN_SCORE = 0.70
 
 ROOT = Path(__file__).parent
@@ -52,7 +53,39 @@ ASSETS_DIR.mkdir(exist_ok=True)
 ASSET_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 ASSET_FORMATS = {"PNG", "JPEG", "WEBP"}
 
-app = FastAPI(title="QR Art Studio")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """Replaces the deprecated @app.on_event("startup"/"shutdown") pattern.
+
+    Body references module globals (RETENTION_KEEP, get_db, _worker, etc.)
+    that are defined later in the file — Python resolves them at call time
+    (when the lifespan runs), not at definition time, so the forward
+    reference is safe.
+    """
+    # ── startup ──
+    db = get_db()
+    evicted = db.evict_old_jobs(keep=RETENTION_KEEP)
+    if evicted:
+        removed = _cleanup_evicted_files(evicted)
+        print(
+            f"[retention] kept newest {RETENTION_KEEP} jobs, "
+            f"evicted {len(evicted)} (removed {removed} output dirs)",
+            flush=True,
+        )
+    # Orphan sweep: outputs/{id}/ directories without a matching DB row.
+    found, removed = _cleanup_orphan_dirs()
+    if found:
+        print(
+            f"[orphan-sweep] found {found} orphaned output dir(s), removed {removed}",
+            flush=True,
+        )
+    _worker.start()
+    yield
+    # ── shutdown ──
+    _worker.stop()
+
+
+app = FastAPI(title="QR Art Studio", lifespan=_lifespan)
 
 
 # Optional shared-password auth. If QRART_AUTH=user:pass is set in the env,
@@ -152,35 +185,8 @@ def _cleanup_orphan_dirs() -> tuple[int, int]:
     return (len(orphans), removed)
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    # Initialize SQLite + run migrations + mark orphans before the first
-    # request arrives. Runs once per process.
-    db = get_db()
-    evicted = db.evict_old_jobs(keep=RETENTION_KEEP)
-    if evicted:
-        removed = _cleanup_evicted_files(evicted)
-        print(
-            f"[retention] kept newest {RETENTION_KEEP} jobs, "
-            f"evicted {len(evicted)} (removed {removed} output dirs)",
-            flush=True,
-        )
-    # Orphan sweep: outputs/{id}/ directories without a matching DB row.
-    # Accumulates from manual DB resets, retention pre-cleanup-implementation
-    # eviction, or any failed-mid-write path. Clean at startup so disk +
-    # DB stay in sync across restarts.
-    found, removed = _cleanup_orphan_dirs()
-    if found:
-        print(
-            f"[orphan-sweep] found {found} orphaned output dir(s), removed {removed}",
-            flush=True,
-        )
-    _worker.start()
-
-
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    _worker.stop()
+# Startup + shutdown logic moved to the _lifespan() async context manager
+# above (FastAPI 0.93+ replacement for the deprecated @app.on_event).
 
 # One Generator per model, lazily created on first use. Models that haven't
 # been used in this session don't consume memory. Switching back to a model
