@@ -1408,6 +1408,23 @@
 
   let currentCandidate = null;
 
+  // ── Scanner compatibility tier ───────────────────────────────────────────
+  // Roll the 3-way breakdown into a single tier chip. Mirrors the Python
+  // qrart.scanner.compatibility_tier() exactly so backend + UI agree.
+  function compatTier(cv2, zxing, qreader) {
+    if (cv2 == null && zxing == null && qreader == null) return null;  // not measured
+    const c = !!cv2, z = !!zxing, q = !!qreader;
+    if (c && z && q) return { key: "universal", label: "🟢 Universal", cls: "good", desc: "Decodes on every scanner (iOS, Android, professional, our pipeline)" };
+    if (c && z)     return { key: "phone-ready", label: "🟡 Phone-ready", cls: "good", desc: "Decodes on cv2 + zxing — stock iOS Camera and Android scanners read it" };
+    if (z || c)    return { key: "ios-class", label: "🟠 iOS-class", cls: "", desc: "Decodes via zxing only — iOS Camera reads it, but many Android scanners may fail" };
+    if (q)         return { key: "soft", label: "🔴 Soft", cls: "bad", desc: "Only our YOLO+libzbar fallback decodes it — won't scan on most phones, only on professional scanners" };
+    return { key: "none", label: "⚫ No decode", cls: "bad", desc: "No scanner decoded it" };
+  }
+  function compatTooltip(c) {
+    const fmt = (v) => v == null ? "?" : (v ? "✓" : "✗");
+    return `cv2 ${fmt(c.scans_cv2)} · zxing ${fmt(c.scans_zxing)} · qreader ${fmt(c.scans_qreader)}`;
+  }
+
   function renderMeta(c) {
     currentCandidate = c;
     const refineChip = c.refine_strength != null
@@ -1418,8 +1435,13 @@
     const scoreChip = sc == null
       ? ""
       : `<span class="chip ${scoreCls}" title="Per-module luminance match against the ground-truth QR">score ${(sc * 100).toFixed(0)}%</span>`;
+    const tier = compatTier(c.scans_cv2, c.scans_zxing, c.scans_qreader);
+    const compatChip = tier
+      ? `<span class="chip ${tier.cls}" title="${tier.desc}\n${compatTooltip(c)}">${tier.label}</span>`
+      : "";
     $("meta").innerHTML = `
       <span class="chip ${c.scans ? "good" : "bad"}">${c.scans ? "✓ scans" : "✗ does not scan"}</span>
+      ${compatChip}
       ${scoreChip}
       <span class="chip">seed ${c.seed}</span>
       <span class="chip">scale ${c.controlnet_scale}</span>
@@ -1663,6 +1685,9 @@
           controlnet_scale: d.controlnet_scale,
           refine_strength: d.refine_strength,
           scannability: d.scannability,
+          scans_cv2: d.scans_cv2,
+          scans_zxing: d.scans_zxing,
+          scans_qreader: d.scans_qreader,
         });
         // Best so far = first scanning candidate, else highest score.
         const sorted = [...liveCandidates].sort((a, b) =>
@@ -1776,6 +1801,9 @@
       controlnet_scale: c.controlnet_scale,
       refine_strength: c.refine_strength,
       scannability: c.scannability,
+      scans_cv2: c.scans_cv2,
+      scans_zxing: c.scans_zxing,
+      scans_qreader: c.scans_qreader,
     }));
     const bestIndex = cands.findIndex((c) => c.id === j.best_candidate_id);
     setQrPreview(j.qr_image_path);

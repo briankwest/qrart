@@ -13,7 +13,7 @@ from .canvas import (
 )
 from .pipeline import QRArtPipeline
 from .scannability import score as scannability_score
-from .scanner import scan
+from .scanner import scan, scan_breakdown
 from .styles import compose
 
 
@@ -137,6 +137,14 @@ class Candidate:
     controlnet_scale: float
     refine_strength: float | None  # None when refine=False
     scannability: float = 0.0       # 0.0-1.0, fraction of correctly-resolved QR modules
+    # Per-scanner decode results — used to derive the compatibility tier
+    # (universal / phone-ready / ios-class / soft / none) for downstream UI
+    # and gallery filtering. None means we never measured (shouldn't happen
+    # on fresh candidates; existing rows from before migration 009 get
+    # populated by scripts/backfill_scanner_breakdown.py).
+    scans_cv2: bool | None = None
+    scans_zxing: bool | None = None
+    scans_qreader: bool | None = None
 
 
 @dataclass
@@ -263,6 +271,9 @@ class Generator:
                 controlnet_scale=cand.controlnet_scale,
                 refine_strength=cand.refine_strength,
                 scannability=cand.scannability,
+                scans_cv2=cand.scans_cv2,
+                scans_zxing=cand.scans_zxing,
+                scans_qreader=cand.scans_qreader,
                 **extra,
             )
 
@@ -366,7 +377,11 @@ class Generator:
                     step_callback=progress.step_cb("adetailer", req.adetailer_steps),
                     cancel_check=progress.cancel_check,
                 )
-            decoded = scan(final)
+            br = scan_breakdown(final)
+            decoded = next(
+                (v for v in br.values() if v == req.data),
+                next((v for v in br.values() if v), None),
+            )
             best = Candidate(
                 image=final,
                 pass1_image=best.pass1_image,
@@ -376,6 +391,9 @@ class Generator:
                 controlnet_scale=best.controlnet_scale,
                 refine_strength=best.refine_strength,
                 scannability=_score_for(final, req.data, comp),
+                scans_cv2=br["cv2"] == req.data,
+                scans_zxing=br["zxing"] == req.data,
+                scans_qreader=br["qreader"] == req.data,
             )
             candidates[best_idx] = best
 
@@ -507,26 +525,36 @@ class Generator:
                 qr_size=comp.qr_size,
             )
 
-        def composite_and_scan(qr_art: Image.Image) -> tuple[Image.Image, str | None]:
-            """Composite, scan, and rescue with finder reinforcement when
-            needed. Uniform behavior for standalone and compositions: try
-            the diffusion's natural output first; only paste corner squares
-            if it didn't scan. This keeps v2's clean diffusion-native
-            corners intact while still rescuing v1's looser outputs.
+        def composite_and_scan(
+            qr_art: Image.Image,
+        ) -> tuple[Image.Image, str | None, dict[str, str | None]]:
+            """Composite, scan with the full 3-way breakdown, and rescue with
+            finder reinforcement when needed. Returns (image, decoded,
+            breakdown). breakdown is {"cv2": .., "zxing": .., "qreader": ..}
+            with each entry being the decoded URL or None.
             """
             final = composite(qr_art)
-            decoded = scan(final)
+            br = scan_breakdown(final)
+            # Match if ANY scanner decoded the right URL (existing behavior).
+            decoded = next(
+                (v for v in br.values() if v == req.data),
+                next((v for v in br.values() if v), None),
+            )
             if decoded != req.data:
                 rescued = reinforce_finders(
                     final, req.data, comp.qr_pos, comp.qr_size,
                 )
-                rescued_decoded = scan(rescued)
+                br_rescued = scan_breakdown(rescued)
+                rescued_decoded = next(
+                    (v for v in br_rescued.values() if v == req.data),
+                    next((v for v in br_rescued.values() if v), None),
+                )
                 if rescued_decoded == req.data:
-                    return rescued, rescued_decoded
-            return final, decoded
+                    return rescued, rescued_decoded, br_rescued
+            return final, decoded, br
 
         if not req.refine:
-            final, decoded = composite_and_scan(qr_pass1)
+            final, decoded, br = composite_and_scan(qr_pass1)
             return Candidate(
                 image=final,
                 pass1_image=None,
@@ -536,6 +564,9 @@ class Generator:
                 controlnet_scale=req.controlnet_scale,
                 refine_strength=None,
                 scannability=_score_for(final, req.data, comp),
+                scans_cv2=br["cv2"] == req.data,
+                scans_zxing=br["zxing"] == req.data,
+                scans_qreader=br["qreader"] == req.data,
             )
 
         # Refine the QR art (not the composite — scene doesn't need it). Try
@@ -565,7 +596,7 @@ class Generator:
                 step_callback=progress.step_cb("refine", req.refine_steps),
                 cancel_check=progress.cancel_check,
             )
-            final, decoded = composite_and_scan(qr_refined)
+            final, decoded, br = composite_and_scan(qr_refined)
             ok = decoded == req.data
             cand = Candidate(
                 image=final,
@@ -576,6 +607,9 @@ class Generator:
                 controlnet_scale=req.controlnet_scale,
                 refine_strength=strength,
                 scannability=_score_for(final, req.data, comp),
+                scans_cv2=br["cv2"] == req.data,
+                scans_zxing=br["zxing"] == req.data,
+                scans_qreader=br["qreader"] == req.data,
             )
             if ok:
                 return cand

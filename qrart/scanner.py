@@ -115,3 +115,46 @@ def scan(img: Image.Image) -> str | None:
         or _scan_zxing(variants)
         or _scan_qreader(img)
     )
+
+
+def scan_breakdown(img: Image.Image) -> dict[str, str | None]:
+    """Run all three scanners independently and return what each decoded.
+
+    Used to record per-scanner compatibility on each candidate so the UI
+    can flag "phone-ready" vs "soft" (only the YOLO-based qreader can read
+    it) outputs. Slightly slower than scan() because we don't short-circuit
+    on the first success — but per-candidate cost is sub-second."""
+    variants = _variants(img)
+    return {
+        "cv2": _scan_cv2(variants),
+        "zxing": _scan_zxing(variants),
+        "qreader": _scan_qreader(img),
+    }
+
+
+def compatibility_tier(
+    cv2_ok: bool, zxing_ok: bool, qreader_ok: bool,
+) -> str:
+    """Roll the 3-way breakdown into a single tier label.
+
+    Tiers (best → worst compatibility):
+      • universal  — all three scanners decode it
+      • phone-ready — cv2 AND zxing pass (most stock phone cameras work)
+      • ios-class  — only zxing passes (iOS Camera reads it; Android
+                     scanners may fail)
+      • soft       — only qreader passes (needs professional scanner)
+      • none       — no decoder succeeded
+    """
+    if cv2_ok and zxing_ok and qreader_ok:
+        return "universal"
+    if cv2_ok and zxing_ok:
+        return "phone-ready"
+    if zxing_ok:
+        return "ios-class"
+    if cv2_ok:
+        # Rare — cv2 stricter than zxing for most patterns. Group with
+        # ios-class since this QR also won't reliably scan on all Androids.
+        return "ios-class"
+    if qreader_ok:
+        return "soft"
+    return "none"

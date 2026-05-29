@@ -215,6 +215,9 @@ class Database:
         image_path: str,
         pass1_image_path: str | None,
         scannability: float | None = None,
+        scans_cv2: bool | None = None,
+        scans_zxing: bool | None = None,
+        scans_qreader: bool | None = None,
     ) -> str:
         cid = new_candidate_id()
         with self._write_lock:
@@ -222,13 +225,17 @@ class Database:
                 """
                 INSERT INTO candidates
                 (id, job_id, idx, seed, controlnet_scale, refine_strength,
-                 scans, decoded, image_path, pass1_image_path, scannability)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                 scans, decoded, image_path, pass1_image_path, scannability,
+                 scans_cv2, scans_zxing, scans_qreader)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     cid, job_id, idx, seed, controlnet_scale, refine_strength,
                     int(bool(scans)), decoded, image_path, pass1_image_path,
                     scannability,
+                    None if scans_cv2 is None else int(bool(scans_cv2)),
+                    None if scans_zxing is None else int(bool(scans_zxing)),
+                    None if scans_qreader is None else int(bool(scans_qreader)),
                 ),
             )
         return cid
@@ -240,6 +247,9 @@ class Database:
         scans: bool | None = None,
         decoded: str | None = None,
         scannability: float | None = None,
+        scans_cv2: bool | None = None,
+        scans_zxing: bool | None = None,
+        scans_qreader: bool | None = None,
     ) -> None:
         """Patch a candidate row. Used after hires_fix / adetailer mutate
         the winner's image in-place so its scan + score fields reflect the
@@ -255,6 +265,15 @@ class Database:
         if scannability is not None:
             sets.append("scannability = ?")
             vals.append(scannability)
+        if scans_cv2 is not None:
+            sets.append("scans_cv2 = ?")
+            vals.append(int(bool(scans_cv2)))
+        if scans_zxing is not None:
+            sets.append("scans_zxing = ?")
+            vals.append(int(bool(scans_zxing)))
+        if scans_qreader is not None:
+            sets.append("scans_qreader = ?")
+            vals.append(int(bool(scans_qreader)))
         if not sets:
             return
         vals.append(candidate_id)

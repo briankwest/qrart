@@ -40,6 +40,38 @@ DEFAULT_EXCLUDE_CATEGORIES = {
     "⚡ Quick & Special",
 }
 
+# Scanner compatibility tiers, in decreasing strictness. Mirrors
+# qrart.scanner.compatibility_tier(). A min-compat of "phone-ready" means
+# the gallery only includes entries where cv2 + zxing both decoded — i.e.
+# stock phone cameras can read it.
+TIER_ORDER = ["universal", "phone-ready", "ios-class", "soft", "none"]
+TIER_INFO = {
+    "universal":   {"icon": "🟢", "label": "Universal"},
+    "phone-ready": {"icon": "🟡", "label": "Phone-ready"},
+    "ios-class":   {"icon": "🟠", "label": "iOS-class"},
+    "soft":        {"icon": "🔴", "label": "Soft"},
+    "none":        {"icon": "⚫", "label": "No decode"},
+}
+
+
+def compatibility_tier(cv2_ok: bool, zxing_ok: bool, qreader_ok: bool) -> str:
+    """Mirror of qrart.scanner.compatibility_tier — kept here so this script
+    has no runtime dep on the live scanner module."""
+    if cv2_ok and zxing_ok and qreader_ok:
+        return "universal"
+    if cv2_ok and zxing_ok:
+        return "phone-ready"
+    if zxing_ok or cv2_ok:
+        return "ios-class"
+    if qreader_ok:
+        return "soft"
+    return "none"
+
+
+def tier_meets(min_tier: str, actual_tier: str) -> bool:
+    """True iff actual_tier is at least as compatible as min_tier."""
+    return TIER_ORDER.index(actual_tier) <= TIER_ORDER.index(min_tier)
+
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 def url_to_fs(url_path: str) -> Path:
@@ -67,6 +99,9 @@ def fetch_scanning_candidates(
           c.scans        AS cand_scans,
           c.decoded      AS cand_decoded,
           c.scannability AS cand_score,
+          c.scans_cv2    AS cand_scans_cv2,
+          c.scans_zxing  AS cand_scans_zxing,
+          c.scans_qreader AS cand_scans_qreader,
           c.image_path   AS cand_image_path,
           c.pass1_image_path AS cand_pass1_image_path,
           c.controlnet_scale AS cand_scale,
@@ -220,6 +255,13 @@ def main() -> int:
                     "(repeatable). Default skips: " + ", ".join(repr(c) for c in DEFAULT_EXCLUDE_CATEGORIES))
     ap.add_argument("--include-all-categories", action="store_true",
                     help="override the default category exclusion list")
+    ap.add_argument("--min-compat", choices=TIER_ORDER, default="phone-ready",
+                    help="minimum scanner compatibility for the main gallery "
+                    "(default: phone-ready). Entries below this tier spill "
+                    "into a separate 'soft' gallery if --no-soft-spill is not set.")
+    ap.add_argument("--no-soft-spill", action="store_true",
+                    help="discard sub-min-compat entries instead of writing "
+                    "them to gallery-soft/ + GALLERY-SOFT.md")
     args = ap.parse_args()
 
     # Build the effective exclusion set.
@@ -260,19 +302,49 @@ def main() -> int:
     print(f"  matched {matched}/{len(tagged)} to a preset "
           f"({len(tagged) - matched} uncategorized)")
 
-    # Reduce to one-per-preset if requested.
-    if args.per_preset:
+    # Compute scanner tier per row (skip those still NULL — backfill pending).
+    def row_tier(row: dict) -> str | None:
+        if row.get("cand_scans_cv2") is None and row.get("cand_scans_zxing") is None and row.get("cand_scans_qreader") is None:
+            return None  # not measured yet; treat as qualifying for now
+        return compatibility_tier(
+            bool(row.get("cand_scans_cv2")),
+            bool(row.get("cand_scans_zxing")),
+            bool(row.get("cand_scans_qreader")),
+        )
+    for _, row in tagged:
+        row["_tier"] = row_tier(row)
+
+    # Split: main gallery = tier meets min_compat (or NULL/unmeasured);
+    # soft = below the bar.
+    above_bar: list[tuple[str | None, dict]] = []
+    below_bar: list[tuple[str | None, dict]] = []
+    null_count = 0
+    for slug, row in tagged:
+        t = row["_tier"]
+        if t is None:
+            null_count += 1
+            above_bar.append((slug, row))  # benefit of the doubt; backfill will fix later
+            continue
+        if tier_meets(args.min_compat, t):
+            above_bar.append((slug, row))
+        else:
+            below_bar.append((slug, row))
+    print(f"  tier filter (min={args.min_compat}): {len(above_bar)} kept, {len(below_bar)} spilled, {null_count} unmeasured")
+
+    def reduce_to_best_per_preset(items):
+        """If per-preset: keep highest-score row per slug, dedupe uncategorized
+        by prompt prefix + model. Otherwise: return items as-is."""
+        if not args.per_preset:
+            return list(items)
         best_by_slug: dict[str, tuple[str, dict]] = {}
         uncategorized: list[tuple[None, dict]] = []
-        for slug, row in tagged:
+        for slug, row in items:
             if slug is None:
                 uncategorized.append((None, row))
                 continue
             prev = best_by_slug.get(slug)
             if prev is None or (row["cand_score"] or 0) > (prev[1]["cand_score"] or 0):
                 best_by_slug[slug] = (slug, row)
-        # Dedupe uncategorized by (prompt-prefix, model) so identical custom
-        # runs only contribute one entry.
         seen: set = set()
         keep_uncat: list[tuple[None, dict]] = []
         for _, row in uncategorized:
@@ -281,168 +353,233 @@ def main() -> int:
                 continue
             seen.add(key)
             keep_uncat.append((None, row))
-        entries = list(best_by_slug.values()) + keep_uncat
-    else:
-        entries = tagged
+        return list(best_by_slug.values()) + keep_uncat
 
-    print(f"  selected {len(entries)} entries for the gallery")
+    entries = reduce_to_best_per_preset(above_bar)
+    soft_entries = [] if args.no_soft_spill else reduce_to_best_per_preset(below_bar)
+    print(f"  selected {len(entries)} entries for the gallery"
+          + (f", {len(soft_entries)} for the soft gallery" if soft_entries else ""))
     print()
 
-    # Group by category (preset.category for matched, fallback bucket for not).
-    groups: dict[str, list[tuple[str | None, dict]]] = {}
-    excluded_count = 0
-    for slug, row in entries:
-        if slug:
-            preset = PRESETS_BY_SLUG.get(slug)
-            cat = preset.category if preset else "📦 Other"
-        else:
-            cat = "📦 Uncategorized — custom runs"
-        # Drop excluded categories. Substring match so partial names work
-        # ("Quick" filters out "⚡ Quick & Special").
-        if any(ex.lower() in cat.lower() for ex in exclude):
-            excluded_count += 1
-            continue
-        groups.setdefault(cat, []).append((slug, row))
+    def group_by_category(items):
+        groups: dict[str, list[tuple[str | None, dict]]] = {}
+        excluded = 0
+        for slug, row in items:
+            if slug:
+                preset = PRESETS_BY_SLUG.get(slug)
+                cat = preset.category if preset else "📦 Other"
+            else:
+                cat = "📦 Uncategorized — custom runs"
+            # Drop excluded categories.
+            if any(ex.lower() in cat.lower() for ex in exclude):
+                excluded += 1
+                continue
+            groups.setdefault(cat, []).append((slug, row))
+        return groups, excluded
+
+    groups, excluded_count = group_by_category(entries)
+    soft_groups, soft_excluded_count = group_by_category(soft_entries)
     if exclude:
         print(f"  excluded {excluded_count} entries from filtered categories: "
-              f"{', '.join(repr(e) for e in sorted(exclude))}")
+              f"{', '.join(repr(e) for e in sorted(exclude))}"
+              + (f" (+ {soft_excluded_count} from soft tier)" if soft_excluded_count else ""))
 
     # Maintain preset order within each category, then descending by score.
     preset_order = {p.slug: i for i, p in enumerate(PRESETS)}
-    for cat, items in groups.items():
-        items.sort(
-            key=lambda e: (
-                preset_order.get(e[0], 1_000_000),
-                -((e[1]["cand_score"] or 0)),
+    def sort_in_place(g):
+        for cat, items in g.items():
+            items.sort(
+                key=lambda e: (
+                    preset_order.get(e[0], 1_000_000),
+                    -((e[1]["cand_score"] or 0)),
+                )
             )
-        )
+    sort_in_place(groups)
+    sort_in_place(soft_groups)
 
     if args.dry_run:
+        print("\nMain gallery:")
         for cat, items in groups.items():
-            print(f"\n{cat}: {len(items)} entries")
-            for slug, row in items[:5]:
-                tag = slug or "(uncategorized)"
-                print(f"  {tag} · score={row['cand_score']:.2f} · {row['cand_image_path']}")
-            if len(items) > 5:
-                print(f"  ... and {len(items) - 5} more")
+            print(f"  {cat}: {len(items)} entries")
+        if soft_entries:
+            print("\nSoft gallery (sub-min-compat):")
+            for cat, items in soft_groups.items():
+                print(f"  {cat}: {len(items)} entries")
         return 0
 
-    # Prepare gallery dir.
-    gallery_dir = ROOT / args.gallery_dir
-    if not args.append and gallery_dir.exists():
-        shutil.rmtree(gallery_dir)
-    gallery_dir.mkdir(exist_ok=True)
+    def write_gallery(
+        gallery_dir_name: str,
+        output_filename: str,
+        title: str,
+        intro: str,
+        groups_in: dict,
+    ) -> int:
+        """Copy images for one gallery (main or soft) + write its markdown.
+        Returns the number of images copied."""
+        gallery_path = ROOT / gallery_dir_name
+        if not args.append and gallery_path.exists():
+            shutil.rmtree(gallery_path)
+        gallery_path.mkdir(exist_ok=True)
+        md_groups: dict[str, list[dict[str, Any]]] = {}
+        copied = 0
+        skipped = 0
+        for cat, items in groups_in.items():
+            md_groups[cat] = []
+            for slug, row in items:
+                src = url_to_fs(row["cand_image_path"])
+                if not src.exists():
+                    print(f"  warning: missing file {src} (cand {row['cand_id']}), skipping",
+                          file=sys.stderr)
+                    skipped += 1
+                    continue
+                if slug:
+                    base = slug_safe(slug)
+                    if not args.per_preset:
+                        base = f"{base}-{short_id(row['cand_id'])}"
+                else:
+                    base = f"custom-{short_id(row['job_id'])}"
+                dest = gallery_path / f"{base}.png"
+                shutil.copy2(src, dest)
+                copied += 1
+                qr_rel = None
+                if args.include_qr and row.get("job_qr_image"):
+                    qr_src = url_to_fs(row["job_qr_image"])
+                    if qr_src.exists():
+                        qr_dest = gallery_path / f"{base}.qr.png"
+                        shutil.copy2(qr_src, qr_dest)
+                        qr_rel = f"{gallery_dir_name}/{base}.qr.png"
 
-    # Copy each entry's image (and optionally qr.png) into the gallery dir,
-    # building the per-cell metadata as we go.
-    md_groups: dict[str, list[dict[str, Any]]] = {}
-    copied = 0
-    skipped = 0
-    for cat, items in groups.items():
-        md_groups[cat] = []
-        for slug, row in items:
-            src = url_to_fs(row["cand_image_path"])
-            if not src.exists():
-                print(f"  warning: missing file {src} (cand {row['cand_id']}), skipping",
-                      file=sys.stderr)
-                skipped += 1
+                preset = PRESETS_BY_SLUG.get(slug) if slug else None
+                name = preset.name if preset else f"Custom · job {row['job_id'][:8]}"
+                scale = row["cand_scale"] or row["job_scale"] or 0
+                tier = row.get("_tier")
+                tier_info = TIER_INFO.get(tier) if tier else None
+                md_groups[cat].append({
+                    "name": name,
+                    "slug": slug,
+                    "icon": preset.icon if preset else "📦",
+                    "image_rel": f"{gallery_dir_name}/{base}.png",
+                    "qr_rel": qr_rel,
+                    "prompt": truncate(row.get("job_prompt") or "", args.max_prompt_len),
+                    "model": row.get("job_model"),
+                    "score": row["cand_score"] or 0,
+                    "seed": row["cand_seed"],
+                    "scale": float(scale),
+                    "great_fit": bool(preset.great_fit) if preset else False,
+                    "tier": tier,
+                    "tier_label": (tier_info["icon"] + " " + tier_info["label"]) if tier_info else None,
+                    "scans_cv2": row.get("cand_scans_cv2"),
+                    "scans_zxing": row.get("cand_scans_zxing"),
+                    "scans_qreader": row.get("cand_scans_qreader"),
+                })
+
+        print(f"  copied {copied} image(s) to {gallery_path}/" + (f" (skipped {skipped})" if skipped else ""))
+
+        # Build the markdown.
+        lines: list[str] = []
+        lines.append(f"# {title}")
+        lines.append("")
+        lines.append(intro)
+        lines.append("")
+        lines.append(
+            f"_Built {datetime.now(timezone.utc).isoformat(timespec='seconds')} · "
+            f"{copied} entries · {len(md_groups)} categories · "
+            f"min score {args.min_score} · min compat {args.min_compat}_"
+        )
+        lines.append("")
+        lines.append("**Scanner compatibility tiers:** 🟢 Universal (all scanners) · "
+                     "🟡 Phone-ready (cv2 + zxing, works on stock phones) · "
+                     "🟠 iOS-class (zxing only, Android may struggle) · "
+                     "🔴 Soft (only YOLO+libzbar fallback decodes — pro scanners only)")
+        lines.append("")
+        lines.append("Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — "
+                     f"a local Stable Diffusion 1.5 + QR Monster ControlNet generator with "
+                     f"200 one-click presets, per-scanner verification, automated "
+                     f"calibration, and gallery building.")
+        lines.append("")
+
+        cols = args.columns
+        cell_width_pct = 100 // cols
+        for cat, items in md_groups.items():
+            if not items:
                 continue
-            if slug:
-                base = slug_safe(slug)
-                if not args.per_preset:
-                    base = f"{base}-{short_id(row['cand_id'])}"
-            else:
-                base = f"custom-{short_id(row['job_id'])}"
-            dest = gallery_dir / f"{base}.png"
-            shutil.copy2(src, dest)
-            copied += 1
-            qr_rel = None
-            if args.include_qr and row.get("job_qr_image"):
-                qr_src = url_to_fs(row["job_qr_image"])
-                if qr_src.exists():
-                    qr_dest = gallery_dir / f"{base}.qr.png"
-                    shutil.copy2(qr_src, qr_dest)
-                    qr_rel = f"{args.gallery_dir}/{base}.qr.png"
+            lines.append(f"## {cat}")
+            lines.append("")
+            lines.append("<table>")
+            for row_start in range(0, len(items), cols):
+                row_items = items[row_start:row_start + cols]
+                lines.append("  <tr>")
+                for it in row_items:
+                    fit = ' <sub title="great QR fit">★</sub>' if it["great_fit"] else ""
+                    qr_link = (
+                        f'<br><a href="{it["qr_rel"]}"><sub>view source QR ↗</sub></a>'
+                        if it.get("qr_rel") else ""
+                    )
+                    tier_html = ""
+                    if it["tier_label"]:
+                        def fmt(v): return "?" if v is None else ("✓" if v else "✗")
+                        tier_html = (
+                            f'<br><sub title="cv2 {fmt(it["scans_cv2"])} · '
+                            f'zxing {fmt(it["scans_zxing"])} · '
+                            f'qreader {fmt(it["scans_qreader"])}">'
+                            f'{it["tier_label"]}</sub>'
+                        )
+                    lines.append(
+                        f'    <td align="center" width="{cell_width_pct}%" valign="top">\n'
+                        f'      <a href="{it["image_rel"]}">'
+                        f'<img src="{it["image_rel"]}" width="240" alt="{md_escape(it["name"])}" />'
+                        f'</a>\n'
+                        f'      <br><b>{md_escape(it["name"])}</b>{fit}\n'
+                        f'      <br><sub>{md_escape(it["prompt"])}</sub>\n'
+                        f'      <br><sub>★ {it["score"]:.2f} · seed {it["seed"]} · '
+                        f'scale {it["scale"]:.2f} · {md_escape(it["model"] or "?")}</sub>'
+                        f'{tier_html}'
+                        f'{qr_link}\n'
+                        f'    </td>'
+                    )
+                for _ in range(cols - len(row_items)):
+                    lines.append('    <td></td>')
+                lines.append("  </tr>")
+            lines.append("</table>")
+            lines.append("")
 
-            preset = PRESETS_BY_SLUG.get(slug) if slug else None
-            name = preset.name if preset else f"Custom · job {row['job_id'][:8]}"
-            scale = row["cand_scale"] or row["job_scale"] or 0
-            md_groups[cat].append({
-                "name": name,
-                "slug": slug,
-                "icon": preset.icon if preset else "📦",
-                "image_rel": f"{args.gallery_dir}/{base}.png",
-                "qr_rel": qr_rel,
-                "prompt": truncate(row.get("job_prompt") or "", args.max_prompt_len),
-                "model": row.get("job_model"),
-                "score": row["cand_score"] or 0,
-                "seed": row["cand_seed"],
-                "scale": float(scale),
-                "great_fit": bool(preset.great_fit) if preset else False,
-            })
+        out = ROOT / output_filename
+        out.write_text("\n".join(lines))
+        print(f"  wrote {out}")
+        return copied
 
-    print(f"  copied {copied} image(s) to {gallery_dir}/" + (f" (skipped {skipped})" if skipped else ""))
-
-    # Build the markdown.
-    lines: list[str] = []
-    lines.append("# QR Art Gallery")
-    lines.append("")
-    lines.append(f"Scannable QR art outputs that decode to `{args.target_url}`.")
-    lines.append("Every image below is a real QR code — point your phone at it.")
-    lines.append("")
-    lines.append(
-        f"_Built {datetime.now(timezone.utc).isoformat(timespec='seconds')} · "
-        f"{copied} entries · {len(groups)} categories · "
-        f"min scan score {args.min_score}_"
+    main_count = write_gallery(
+        args.gallery_dir, args.output,
+        title="QR Art Gallery",
+        intro=(
+            f"Scannable QR art outputs that decode to `{args.target_url}`. "
+            f"Every image below is a real QR code — point your phone at it. "
+            f"Filtered to compatibility tier **{TIER_INFO[args.min_compat]['icon']} "
+            f"{TIER_INFO[args.min_compat]['label']}** or better."
+        ),
+        groups_in=groups,
     )
-    lines.append("")
-    lines.append("Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — "
-                 f"a local Stable Diffusion 1.5 + QR Monster ControlNet generator with "
-                 f"200 one-click presets, multi-scanner verification, and an automated "
-                 f"calibration tool.")
-    lines.append("")
 
-    cols = args.columns
-    cell_width_pct = 100 // cols
-    for cat, items in md_groups.items():
-        if not items:
-            continue
-        lines.append(f"## {cat}")
-        lines.append("")
-        lines.append("<table>")
-        for row_start in range(0, len(items), cols):
-            row_items = items[row_start:row_start + cols]
-            lines.append("  <tr>")
-            for it in row_items:
-                fit = ' <sub title="great QR fit">★</sub>' if it["great_fit"] else ""
-                qr_link = (
-                    f'<br><a href="{it["qr_rel"]}"><sub>view source QR ↗</sub></a>'
-                    if it.get("qr_rel") else ""
-                )
-                lines.append(
-                    f'    <td align="center" width="{cell_width_pct}%" valign="top">\n'
-                    f'      <a href="{it["image_rel"]}">'
-                    f'<img src="{it["image_rel"]}" width="240" alt="{md_escape(it["name"])}" />'
-                    f'</a>\n'
-                    f'      <br><b>{md_escape(it["name"])}</b>{fit}\n'
-                    f'      <br><sub>{md_escape(it["prompt"])}</sub>\n'
-                    f'      <br><sub>★ {it["score"]:.2f} · seed {it["seed"]} · '
-                    f'scale {it["scale"]:.2f} · {md_escape(it["model"] or "?")}</sub>'
-                    f'{qr_link}\n'
-                    f'    </td>'
-                )
-            for _ in range(cols - len(row_items)):
-                lines.append('    <td></td>')
-            lines.append("  </tr>")
-        lines.append("</table>")
-        lines.append("")
+    soft_count = 0
+    if soft_entries and not args.no_soft_spill:
+        soft_count = write_gallery(
+            "gallery-soft", "GALLERY-SOFT.md",
+            title="QR Art Gallery — Soft tier",
+            intro=(
+                f"Outputs that decode to `{args.target_url}` only via our "
+                f"YOLO + libzbar fallback scanner (`qreader`). "
+                f"**Most stock phone cameras will NOT scan these.** Use a "
+                f"professional desk scanner or our own pipeline. "
+                f"Kept for reference — the diffusion is often visually striking "
+                f"but pushes the QR pattern too far for consumer-grade decoders."
+            ),
+            groups_in=soft_groups,
+        )
 
-    output_path = ROOT / args.output
-    output_path.write_text("\n".join(lines))
-    print(f"  wrote {output_path}")
     print()
-    print("Done. Review GALLERY.md and the gallery/ dir, then:")
-    print(f"  git add {args.output} {args.gallery_dir}/")
+    print(f"Done. Main gallery: {main_count} entries; soft gallery: {soft_count} entries.")
+    print(f"  git add {args.output} {args.gallery_dir}/"
+          + (f" GALLERY-SOFT.md gallery-soft/" if soft_count else ""))
     print(f"  git commit -m 'Update QR art gallery'")
     print(f"  git push")
     return 0

@@ -399,6 +399,9 @@ def _run_job(job: Job, cancelled: bool) -> None:
             image_path=url,
             pass1_image_path=pass1_url,
             scannability=cand.scannability,
+            scans_cv2=cand.scans_cv2,
+            scans_zxing=cand.scans_zxing,
+            scans_qreader=cand.scans_qreader,
         )
         candidate_ids.append(cid)
         return {"url": url, "pass1_url": pass1_url, "candidate_id": cid}
@@ -491,6 +494,9 @@ def _run_job(job: Job, cancelled: bool) -> None:
                 scans=winner.scans,
                 decoded=winner.decoded,
                 scannability=winner.scannability,
+                scans_cv2=winner.scans_cv2,
+                scans_zxing=winner.scans_zxing,
+                scans_qreader=winner.scans_qreader,
             )
 
     if qr_path is not None and not qr_path.exists():
