@@ -25,6 +25,10 @@ qrart.db-shm
 *.png
 *.log
 
+# ...but the curated gallery IS committed (overrides *.png above)
+!gallery/
+!gallery/**/*.png
+
 # OS / editor / tool config
 .DS_Store
 .claude/
