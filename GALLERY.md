@@ -3,7 +3,7 @@
 Scannable QR art outputs that decode to `https://github.com/briankwest/qrart`.
 Every image below is a real QR code — point your phone at it.
 
-_Built 2026-05-29T15:13:54+00:00 · 58 entries · 16 categories · min scan score 0.9_
+_Built 2026-05-29T15:16:29+00:00 · 56 entries · 15 categories · min scan score 0.9_
 
 Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — a local Stable Diffusion 1.5 + QR Monster ControlNet generator with 200 one-click presets, multi-scanner verification, and an automated calibration tool.
 
@@ -42,26 +42,6 @@ Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — a local
       <br><b>Rothko (color field)</b>
       <br><sub>fields of orange and red interpreted in the style of Mark Rothko, soft-edged stacked rectangular color fields, luminous color, contemplative…</sub>
       <br><sub>★ 1.00 · seed 7592986 · scale 1.75 · dreamshaper</sub>
-    </td>
-    <td></td>
-  </tr>
-</table>
-
-## ⚡ Quick & Special
-
-<table>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/quick-iterate.png"><img src="gallery/quick-iterate.png" width="240" alt="Quick iterate (Fast mode)" /></a>
-      <br><b>Quick iterate (Fast mode)</b>
-      <br><sub>a beautiful landscape, hyperdetailed photography, cinematic lighting</sub>
-      <br><sub>★ 1.00 · seed 389517107 · scale 1.08 · photoreal</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/print-ready.png"><img src="gallery/print-ready.png" width="240" alt="Print-ready hi-res" /></a>
-      <br><b>Print-ready hi-res</b>
-      <br><sub>a stunning landscape, hyperdetailed photography, cinematic lighting, sharp focus, magazine quality</sub>
-      <br><sub>★ 0.97 · seed 1428363095 · scale 1.25 · photoreal</sub>
     </td>
     <td></td>
   </tr>
@@ -182,6 +162,46 @@ Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — a local
   </tr>
 </table>
 
+## 🖋️ Stylized & Illustration
+
+<table>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <a href="gallery/mucha.png"><img src="gallery/mucha.png" width="240" alt="Mucha (Art Nouveau)" /></a>
+      <br><b>Mucha (Art Nouveau)</b>
+      <br><sub>an Art Nouveau goddess in the style of Alphonse Mucha, Art Nouveau ornate flowing borders, sinuous decorative lines, elegant figure surround…</sub>
+      <br><sub>★ 0.99 · seed 770203802 · scale 1.56 · dreamshaper</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <a href="gallery/ghibli.png"><img src="gallery/ghibli.png" width="240" alt="Miyazaki / Ghibli" /></a>
+      <br><b>Miyazaki / Ghibli</b>
+      <br><sub>a flying castle in clouds, Studio Ghibli anime aesthetic in the style of Hayao Miyazaki, soft watercolor and ink illustration, lush nature w…</sub>
+      <br><sub>★ 0.99 · seed 287053807 · scale 1.56 · dreamshaper</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <a href="gallery/hopper.png"><img src="gallery/hopper.png" width="240" alt="Edward Hopper" /></a>
+      <br><b>Edward Hopper</b>
+      <br><sub>a late-night diner with single patron in the style of Edward Hopper, American realism painting, melancholic atmosphere, dramatic raking sunl…</sub>
+      <br><sub>★ 0.99 · seed 138996726 · scale 1.56 · dreamshaper</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%" valign="top">
+      <a href="gallery/frazetta.png"><img src="gallery/frazetta.png" width="240" alt="Frazetta (heroic fantasy)" /></a>
+      <br><b>Frazetta (heroic fantasy)</b>
+      <br><sub>a barbarian warrior with sword in the style of Frank Frazetta, heroic fantasy oil painting, dramatic muscular figures in dynamic action, omi…</sub>
+      <br><sub>★ 0.99 · seed 285470831 · scale 1.56 · dreamshaper</sub>
+    </td>
+    <td align="center" width="33%" valign="top">
+      <a href="gallery/beksinski.png"><img src="gallery/beksinski.png" width="240" alt="Beksiński" /></a>
+      <br><b>Beksiński</b>
+      <br><sub>towering rusted cathedral ruins in the style of Zdzisław Beksiński, dystopian surreal landscape, towering rusted twisted architecture, foreb…</sub>
+      <br><sub>★ 0.99 · seed 750468486 · scale 1.56 · dreamshaper</sub>
+    </td>
+    <td></td>
+  </tr>
+</table>
+
 ## 🌻 Impressionist
 
 <table>
@@ -224,46 +244,6 @@ Generated with [QR Art Studio](https://github.com/briankwest/qrcode) — a local
       <br><sub>a Moulin Rouge cabaret dancer in the style of Henri de Toulouse-Lautrec, bold poster art composition, flat planes of color, expressive line…</sub>
       <br><sub>★ 0.99 · seed 1921299773 · scale 1.56 · dreamshaper</sub>
     </td>
-  </tr>
-</table>
-
-## 🖋️ Stylized & Illustration
-
-<table>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/mucha.png"><img src="gallery/mucha.png" width="240" alt="Mucha (Art Nouveau)" /></a>
-      <br><b>Mucha (Art Nouveau)</b>
-      <br><sub>an Art Nouveau goddess in the style of Alphonse Mucha, Art Nouveau ornate flowing borders, sinuous decorative lines, elegant figure surround…</sub>
-      <br><sub>★ 0.99 · seed 770203802 · scale 1.56 · dreamshaper</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/ghibli.png"><img src="gallery/ghibli.png" width="240" alt="Miyazaki / Ghibli" /></a>
-      <br><b>Miyazaki / Ghibli</b>
-      <br><sub>a flying castle in clouds, Studio Ghibli anime aesthetic in the style of Hayao Miyazaki, soft watercolor and ink illustration, lush nature w…</sub>
-      <br><sub>★ 0.99 · seed 287053807 · scale 1.56 · dreamshaper</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/hopper.png"><img src="gallery/hopper.png" width="240" alt="Edward Hopper" /></a>
-      <br><b>Edward Hopper</b>
-      <br><sub>a late-night diner with single patron in the style of Edward Hopper, American realism painting, melancholic atmosphere, dramatic raking sunl…</sub>
-      <br><sub>★ 0.99 · seed 299798722 · scale 1.40 · dreamshaper</sub>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/frazetta.png"><img src="gallery/frazetta.png" width="240" alt="Frazetta (heroic fantasy)" /></a>
-      <br><b>Frazetta (heroic fantasy)</b>
-      <br><sub>a barbarian warrior with sword in the style of Frank Frazetta, heroic fantasy oil painting, dramatic muscular figures in dynamic action, omi…</sub>
-      <br><sub>★ 0.98 · seed 162172174 · scale 1.30 · dreamshaper</sub>
-    </td>
-    <td align="center" width="33%" valign="top">
-      <a href="gallery/beksinski.png"><img src="gallery/beksinski.png" width="240" alt="Beksiński" /></a>
-      <br><b>Beksiński</b>
-      <br><sub>towering rusted cathedral ruins in the style of Zdzisław Beksiński, dystopian surreal landscape, towering rusted twisted architecture, foreb…</sub>
-      <br><sub>★ 0.98 · seed 2076258312 · scale 1.25 · dreamshaper</sub>
-    </td>
-    <td></td>
   </tr>
 </table>
 

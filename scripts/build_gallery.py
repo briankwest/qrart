@@ -32,6 +32,14 @@ from qrart.presets import PRESETS, PRESETS_BY_SLUG  # noqa: E402
 OUTPUT_DIR = ROOT / "outputs"
 DB_PATH = ROOT / "qrart.db"
 
+# Categories whose presets are technical recipes (Fast mode, print-ready,
+# branded-logo) rather than aesthetic ones. The prompts are generic
+# placeholders ("a beautiful landscape") that can land on anything,
+# including content not appropriate for a public gallery. Skip by default.
+DEFAULT_EXCLUDE_CATEGORIES = {
+    "⚡ Quick & Special",
+}
+
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 def url_to_fs(url_path: str) -> Path:
@@ -207,7 +215,18 @@ def main() -> int:
                     help="don't copy or write — just print what would happen")
     ap.add_argument("--db", default=str(DB_PATH),
                     help=f"path to qrart.db (default {DB_PATH})")
+    ap.add_argument("--exclude-category", action="append", default=[],
+                    help="exclude an entire category by substring match "
+                    "(repeatable). Default skips: " + ", ".join(repr(c) for c in DEFAULT_EXCLUDE_CATEGORIES))
+    ap.add_argument("--include-all-categories", action="store_true",
+                    help="override the default category exclusion list")
     args = ap.parse_args()
+
+    # Build the effective exclusion set.
+    exclude: set[str] = set()
+    if not args.include_all_categories:
+        exclude |= DEFAULT_EXCLUDE_CATEGORIES
+    exclude |= set(args.exclude_category)
 
     db_path = Path(args.db)
     if not db_path.exists():
@@ -271,13 +290,22 @@ def main() -> int:
 
     # Group by category (preset.category for matched, fallback bucket for not).
     groups: dict[str, list[tuple[str | None, dict]]] = {}
+    excluded_count = 0
     for slug, row in entries:
         if slug:
             preset = PRESETS_BY_SLUG.get(slug)
             cat = preset.category if preset else "📦 Other"
         else:
             cat = "📦 Uncategorized — custom runs"
+        # Drop excluded categories. Substring match so partial names work
+        # ("Quick" filters out "⚡ Quick & Special").
+        if any(ex.lower() in cat.lower() for ex in exclude):
+            excluded_count += 1
+            continue
         groups.setdefault(cat, []).append((slug, row))
+    if exclude:
+        print(f"  excluded {excluded_count} entries from filtered categories: "
+              f"{', '.join(repr(e) for e in sorted(exclude))}")
 
     # Maintain preset order within each category, then descending by score.
     preset_order = {p.slug: i for i, p in enumerate(PRESETS)}
